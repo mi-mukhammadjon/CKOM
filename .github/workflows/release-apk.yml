@@ -16,7 +16,6 @@ jobs:
     env:
       EXPO_PUBLIC_SUPABASE_URL: ${{ vars.EXPO_PUBLIC_SUPABASE_URL }}
       EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
-      NODE_ENV: production
     steps:
       - uses: actions/checkout@v4
 
@@ -44,8 +43,12 @@ jobs:
       - name: Show signing certificate
         run: keytool -list -v -keystore android/app/debug.keystore -storepass android | grep -E "SHA256|SHA-256"
 
+      # NODE_ENV=production только здесь: на уровне задачи он заставил бы
+      # npm ci пропустить devDependencies, и проверки типов и тесты упали бы
       - name: Build release APK
         working-directory: android
+        env:
+          NODE_ENV: production
         run: ./gradlew assembleRelease -PreactNativeArchitectures=armeabi-v7a,arm64-v8a --no-daemon
 
       - run: cp android/app/build/outputs/apk/release/app-release.apk CKOM.apk
