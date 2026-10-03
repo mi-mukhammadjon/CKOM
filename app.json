@@ -1,25 +1,130 @@
 {
   "expo": {
-    "name": "KCOM",
-    "slug": "KCOM",
-    "version": "1.0.0",
+    "name": "CKOM - Учет коммунальных услуг",
+    "slug": "ckom-mobile",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#0E0F12",
     "ios": {
       "supportsTablet": true
     },
     "android": {
+      "package": "com.ckom.app",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#17191E",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "POST_NOTIFICATIONS",
+        "SCHEDULE_EXACT_ALARM"
+      ],
+      "blockedPermissions": [
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "allowBackup": false,
+      "versionCode": 4
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-font",
+      "expo-sharing",
+      [
+        "expo-notifications",
+        {
+          "color": "#2ED3F0"
+        }
+      ],
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "СКОМ использует галерею, чтобы прикрепить фото счетчика или квитанции.",
+          "cameraPermission": "СКОМ использует камеру, чтобы сфотографировать счетчик или квитанцию.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain",
+          "backgroundColor": "#0E0F12"
+        }
+      ],
+      "expo-secure-store",
+      [
+        "react-native-android-widget",
+        {
+          "fonts": [
+            "./node_modules/@expo-google-fonts/onest/400Regular/Onest_400Regular.ttf",
+            "./node_modules/@expo-google-fonts/onest/500Medium/Onest_500Medium.ttf",
+            "./node_modules/@expo-google-fonts/onest/700Bold/Onest_700Bold.ttf",
+            "./node_modules/@expo-google-fonts/onest/800ExtraBold/Onest_800ExtraBold.ttf"
+          ],
+          "widgets": [
+            {
+              "name": "CkomSmall",
+              "label": "СКОМ · 2×1",
+              "description": "Oylik summa / Сумма за месяц",
+              "minWidth": "110dp",
+              "minHeight": "50dp",
+              "targetCellWidth": 2,
+              "targetCellHeight": 1,
+              "maxResizeWidth": "250dp",
+              "maxResizeHeight": "110dp",
+              "resizeMode": "horizontal|vertical",
+              "widgetFeatures": "reconfigurable",
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widgets/preview-small.png"
+            },
+            {
+              "name": "CkomMedium",
+              "label": "СКОМ · 4×2",
+              "description": "Summa va hisoblagichlar / Сумма и счетчики",
+              "minWidth": "250dp",
+              "minHeight": "110dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 2,
+              "maxResizeWidth": "420dp",
+              "maxResizeHeight": "250dp",
+              "resizeMode": "horizontal|vertical",
+              "widgetFeatures": "reconfigurable",
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widgets/preview-medium.png"
+            },
+            {
+              "name": "CkomLarge",
+              "label": "СКОМ · 4×4",
+              "description": "Batafsil hisobot / Подробная сводка",
+              "minWidth": "250dp",
+              "minHeight": "250dp",
+              "targetCellWidth": 4,
+              "targetCellHeight": 4,
+              "maxResizeWidth": "420dp",
+              "maxResizeHeight": "500dp",
+              "resizeMode": "horizontal|vertical",
+              "widgetFeatures": "reconfigurable",
+              "updatePeriodMillis": 1800000,
+              "previewImage": "./assets/widgets/preview-large.png"
+            }
+          ]
+        }
+      ]
+    ],
+    "scheme": "ckom"
   }
 }

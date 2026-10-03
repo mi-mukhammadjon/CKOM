@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>СКОМ — yuklab olish</title>
+<meta name="description" content="СКОМ — kommunal hisoblagichlar va to'lovlar hisobi. Android ilovasini yuklab oling yoki veb-versiyani oching." />
+<meta name="theme-color" content="#0E0F12" />
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --ink:#15171c; --muted:#5d6370; --line:#e2e5ea; --accent:#0e7cb8; --on-accent:#fff; color-scheme:light; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0e0f12; --card:#17191e; --ink:#f3f4f6; --muted:#a4a9b3; --line:#25282f; --accent:#2ed3f0; --on-accent:#0e0f12; color-scheme:dark; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-family:"Onest",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; padding:40px 18px 56px; }
+  main { max-width:560px; margin:0 auto; display:grid; gap:22px; }
+  .logo { width:96px; height:96px; border-radius:22px; box-shadow:0 18px 40px -18px rgba(0,0,0,.5); }
+  h1 { margin:0; font-size:34px; letter-spacing:-.02em; }
+  .lead { margin:6px 0 0; color:var(--muted); line-height:1.55; }
+  .actions { display:grid; gap:10px; }
+  .btn { display:flex; align-items:center; justify-content:center; gap:10px; height:54px; border-radius:16px; font-weight:700; font-size:16px; text-decoration:none; }
+  .primary { background:var(--accent); color:var(--on-accent); }
+  .secondary { background:var(--card); color:var(--ink); border:1px solid var(--line); }
+  .meta { font-size:13px; color:var(--muted); text-align:center; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:18px; }
+  h2 { margin:0 0 10px; font-size:16px; }
+  ol, ul { margin:0; padding-left:20px; color:var(--muted); line-height:1.7; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:3px; margin-right:8px; }
+  footer { font-size:12px; color:var(--muted); text-align:center; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="СКОМ"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#23262E"/><stop offset="1" stop-color="#0E0F12"/></linearGradient></defs><rect width="1024" height="1024" fill="url(#bg)"/><path d="M735.7 699.7 A292 292 0 1 1 735.7 324.3" fill="none" stroke="#2ED3F0" stroke-width="96" stroke-linecap="round"/><path d="M640.7 620.0 A168 168 0 1 1 640.7 404.0" fill="none" stroke="#F3F4F6" stroke-width="34" stroke-linecap="round" opacity=".9"/><circle cx="512" cy="512" r="48" fill="#F5B700"/></svg>
+    <h1>СКОМ</h1>
+    <p class="lead">Kommunal hisoblagichlar, tariflar va to'lovlar hisobi. Internetsiz ishlaydi, ma'lumotlar telefoningizda shifrlangan holda saqlanadi.</p>
+  </header>
+
+  <div class="actions">
+    <a id="apk" class="btn primary" href="#">Android uchun yuklab olish (APK)</a>
+    <a id="web" class="btn secondary" href="../">Veb-versiyani ochish</a>
+    <div class="meta" id="version">So'nggi versiya · GitHub Releases</div>
+  </div>
+
+  <section>
+    <h2>O'rnatish</h2>
+    <ol>
+      <li>APK faylini yuklab oling.</li>
+      <li>Faylni oching. Telefon so'rasa, «Noma'lum manbalardan o'rnatish»ga ruxsat bering.</li>
+      <li>Avvalgi versiya o'rnatilgan bo'lsa, ustidan yangilanadi — <b>ilovani o'chirmang</b>, aks holda ma'lumotlar yo'qoladi.</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Imkoniyatlar</h2>
+    <ul>
+      <li><span class="dot" style="background:#F5B700"></span>Elektr, <span class="dot" style="background:#1FB8DE"></span>suv, <span class="dot" style="background:#FF8A3D"></span>gaz hisoblagichlari</li>
+      <li>Ijtimoiy me'yor bilan bosqichli tariflar</li>
+      <li>PDF va Excel hisobotlar, inspektor uchun Telegram matni</li>
+      <li>Ish stoli vidjetlari</li>
+      <li>Qurilmalar o'rtasida uchdan-uchgacha shifrlangan sinxronlash</li>
+    </ul>
+  </section>
+
+  <footer>СКОМ · ochiq kodli loyiha</footer>
+</main>
+<script>
+  // Владелец и репозиторий берутся из адреса GitHub Pages: <owner>.github.io/<repo>/download/
+  (function () {
+    var owner = location.hostname.split('.')[0];
+    var repo = location.pathname.split('/').filter(Boolean)[0];
+    if (!owner || !repo || location.hostname.indexOf('github.io') === -1) return;
+    var base = 'https://github.com/' + owner + '/' + repo;
+    document.getElementById('apk').href = base + '/releases/latest/download/CKOM.apk';
+    document.getElementById('version').innerHTML =
+      '<a href="' + base + '/releases" style="color:inherit">Barcha versiyalar · GitHub Releases</a>';
+  })();
+</script>
+</body>
+</html>

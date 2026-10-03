@@ -39,3 +39,12 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Сборки и локальные файлы, которые не должны попасть в репозиторий
+*.apk
+*.aab
+fails/
+photo_*.jpg
+.env
+.env.*
+!.env.example

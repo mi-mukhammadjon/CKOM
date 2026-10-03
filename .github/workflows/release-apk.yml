@@ -1,0 +1,56 @@
+# Сборка APK и публикация в GitHub Releases по тегу версии (например, v1.2.0).
+# Страница загрузки на GitHub Pages всегда ссылается на последний релиз.
+name: Release Android APK
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    env:
+      EXPO_PUBLIC_SUPABASE_URL: ${{ vars.EXPO_PUBLIC_SUPABASE_URL }}
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+      NODE_ENV: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - run: npm ci
+
+      - name: Typecheck and tests
+        run: |
+          npx tsc --noEmit
+          npx jest --ci
+
+      - name: Generate native project
+        run: npx expo prebuild --platform android --no-install
+
+      # Подпись должна совпадать с прежними APK, иначе Android не даст обновиться
+      - name: Show signing certificate
+        run: keytool -list -v -keystore android/app/debug.keystore -storepass android | grep -E "SHA256|SHA-256"
+
+      - name: Build release APK
+        working-directory: android
+        run: ./gradlew assembleRelease -PreactNativeArchitectures=armeabi-v7a,arm64-v8a --no-daemon
+
+      - run: cp android/app/build/outputs/apk/release/app-release.apk CKOM.apk
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: CKOM.apk
+          generate_release_notes: true

@@ -25,9 +25,14 @@ Run lint and typecheck before declaring any task done.
 
 ## Navigation & Routing
 
-- Use **Expo Router** for all navigation. Routes live in `src/app/` — every file there is a screen, `_layout.tsx` files define navigators. Keep non-route code (components, hooks, utils) outside `src/app/`.
-- Import `Link`, `router`, and `useLocalSearchParams` from `expo-router`.
-- Docs: https://docs.expo.dev/router/introduction.md
+This project does **not** use Expo Router. Navigation is a hand-rolled tab switcher:
+
+- `App.tsx` holds the active tab in `useState` and renders one screen from `src/screens/` at a time.
+- `src/components/CustomTabBar.tsx` defines the five tabs (`TabType`); Settings opens as an overlay flag, not a tab.
+- Screens receive navigation callbacks as props (`onNavigateToEntry`, `onSuccess`, `onClose`) — there is no router object and no URL state.
+
+Add a screen by creating it in `src/screens/`, adding its id to `TabType`, and wiring it in both `CustomTabBar` and `App.tsx`. If the app ever needs deep links or browser history, migrating to Expo Router (`src/app/`, `_layout.tsx`) is the right move — but do it as a deliberate, separate change, not piecemeal.
+Docs: https://docs.expo.dev/router/introduction.md
 
 ## Building with EAS
 
