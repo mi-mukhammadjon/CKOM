@@ -108,7 +108,10 @@ const MainNavigator: React.FC = () => {
       <StatusBar style={isDark ? 'light' : 'dark'} />
 
       {/* Persistent App Header */}
-      <Header onOpenSettings={() => setShowSettings(prev => !prev)} />
+      <Header
+        settingsOpen={showSettings}
+        onOpenSettings={() => setShowSettings(prev => !prev)}
+      />
 
       {/*
         Экран и панель вкладок поднимаются над клавиатурой. Режим padding работает
@@ -119,7 +122,7 @@ const MainNavigator: React.FC = () => {
         {/* Screen Body */}
         <View style={[styles.screenContainer, { backgroundColor: theme.background }]}>
           {showSettings ? (
-            <SettingsScreen onClose={() => setShowSettings(false)} />
+            <SettingsScreen />
           ) : (
             <>
               {activeTab === 'dashboard' && (

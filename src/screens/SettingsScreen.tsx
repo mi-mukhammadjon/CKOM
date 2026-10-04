@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import Constants from 'expo-constants';
 import {
+  BackHandler,
   View,
   Text,
   StyleSheet,
@@ -29,11 +31,13 @@ import { RecoverySection } from '../components/RecoverySection';
 import { parseBackup } from '../services/db';
 import { CloudSyncSection } from '../components/CloudSyncSection';
 
-interface SettingsScreenProps {
-  onClose?: () => void;
-}
+type SettingsGroup = 'property' | 'inspectors' | 'interface' | 'cloud' | 'data' | 'widgets' | 'about';
+type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
-export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onClose }) => {
+/** Версия из app.json — не нужно править текст при каждом релизе */
+const APP_VERSION = Constants.expoConfig?.version ?? '';
+
+export const SettingsScreen: React.FC = () => {
   const {
     theme,
     isDark,
@@ -55,6 +59,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onClose }) => {
     resetToDefaults,
     exportBackupData,
     importBackupData,
+    cloud,
+    inspectors,
     storageBackend,
   } = useApp();
 
@@ -63,6 +69,18 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onClose }) => {
     property?: Property;
   } | null>(null);
   const [propertyNameInput, setPropertyNameInput] = useState('');
+  // Открытая группа настроек; null — список групп
+  const [group, setGroup] = useState<SettingsGroup | null>(null);
+
+  // Системная кнопка «Назад» внутри группы возвращает к списку групп
+  useEffect(() => {
+    if (!group) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      setGroup(null);
+      return true;
+    });
+    return () => subscription.remove();
+  }, [group]);
   const [propertyAddressInput, setPropertyAddressInput] = useState('');
 
   const [meterModal, setMeterModal] = useState<{ mode: 'create' | 'edit'; meter?: Meter } | null>(
@@ -331,502 +349,599 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onClose }) => {
     ]);
   };
 
-  return (
-    <ScrollView
-      style={[styles.container, { backgroundColor: theme.background }]}
-      contentContainerStyle={styles.content}
-      showsVerticalScrollIndicator={false}
-    >
-      <View style={styles.header}>
-        <View style={styles.headerText}>
-          <Text style={[styles.title, { color: theme.text }]}>{t('settings.title')}</Text>
-          <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-            {t('settings.subtitle')}
-          </Text>
-        </View>
+  // ---------- Группы настроек ----------
 
-        {onClose && (
-          <TouchableOpacity
-            style={[styles.closeBtn, { backgroundColor: theme.surfaceLight }]}
-            onPress={onClose}
-            accessibilityLabel={t('common.close')}
-          >
-            <Ionicons name="close" size={22} color={theme.textSecondary} />
-          </TouchableOpacity>
-        )}
-      </View>
+  const languageLabel = LANGUAGES.find(option => option.code === language)?.label ?? language;
+  const filledInspectors = inspectors.length;
 
-      {/* Язык интерфейса */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
-          {t('settings.sectionLanguage')}
-        </Text>
-        <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
-          <View style={styles.currencyRow}>
-            {LANGUAGES.map(option => {
-              const isSelected = language === option.code;
-              return (
-                <TouchableOpacity
-                  key={option.code}
-                  style={[
-                    styles.currBtn,
-                    {
-                      backgroundColor: isSelected ? theme.primary : theme.surfaceLight,
-                      borderColor: isSelected ? theme.primary : theme.border,
-                    },
-                  ]}
-                  onPress={() => updateSettings({ language: option.code })}
-                >
-                  <Text
+  const groups: { id: SettingsGroup; icon: IconName; title: string; hint: string; hidden?: boolean }[] = [
+    {
+      id: 'property',
+      icon: 'home-outline',
+      title: t('settings.group.property'),
+      hint: t('settings.group.propertyHint', { name: activeProperty.name, count: meters.length }),
+    },
+    {
+      id: 'inspectors',
+      icon: 'people-outline',
+      title: t('settings.group.inspectors'),
+      hint: t('settings.group.inspectorsHint', { count: filledInspectors }),
+    },
+    {
+      id: 'interface',
+      icon: 'color-palette-outline',
+      title: t('settings.group.interface'),
+      hint: `${languageLabel} · ${settings.currency} · ${
+        isDark ? t('settings.group.themeDark') : t('settings.group.themeLight')
+      }`,
+    },
+    {
+      id: 'cloud',
+      icon: 'cloud-outline',
+      title: t('settings.group.cloud'),
+      hint: cloud.signedIn && cloud.email ? cloud.email : t('settings.group.cloudOff'),
+    },
+    {
+      id: 'data',
+      icon: 'shield-checkmark-outline',
+      title: t('settings.group.data'),
+      hint: t('settings.group.dataHint'),
+    },
+    {
+      id: 'widgets',
+      icon: 'apps-outline',
+      title: t('settings.group.widgets'),
+      hint: t('settings.group.widgetsHint'),
+      hidden: Platform.OS !== 'android',
+    },
+    {
+      id: 'about',
+      icon: 'information-circle-outline',
+      title: t('settings.group.about'),
+      hint: t('settings.group.aboutHint', { version: APP_VERSION }),
+    },
+  ];
+
+  const sections: Record<SettingsGroup, React.ReactNode> = {
+    property: (
+      <>
+          {/* Объекты учета */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+                {t('settings.sectionProperties')}
+              </Text>
+              <TouchableOpacity onPress={openCreateProperty} style={styles.addPropLink}>
+                <Ionicons name="add" size={16} color={theme.primary} />
+                <Text style={[styles.addPropText, { color: theme.primary }]}>{t('common.add')}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+              {properties.map((prop, idx) => {
+                const isSelected = prop.id === activeProperty.id;
+                const isLast = idx === properties.length - 1;
+
+                return (
+                  <TouchableOpacity
+                    key={prop.id}
                     style={[
-                      styles.currBtnText,
-                      {
-                        color: isSelected ? theme.onPrimary : theme.text,
-                        fontFamily: isSelected ? font.extrabold : font.semibold,
+                      styles.propertyRow,
+                      !isLast && { borderBottomWidth: 1, borderBottomColor: theme.borderLight },
+                    ]}
+                    onPress={() => setActivePropertyId(prop.id)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={styles.propertyInfo}>
+                      <Text
+                        style={[
+                          styles.propName,
+                          { color: theme.text, fontFamily: isSelected ? font.bold : font.medium },
+                        ]}
+                      >
+                        {prop.name}
+                      </Text>
+                      {prop.address ? (
+                        <Text style={[styles.propAddress, { color: theme.textSecondary }]}>
+                          {prop.address}
+                        </Text>
+                      ) : null}
+                    </View>
+
+                    {isSelected && (
+                      <View style={[styles.activeBadge, { backgroundColor: theme.primary + '20' }]}>
+                        <Text style={[styles.activeBadgeText, { color: theme.primary }]}>
+                          {t('settings.activeBadge')}
+                        </Text>
+                      </View>
+                    )}
+
+                    <TouchableOpacity style={styles.rowIconBtn} onPress={() => openEditProperty(prop)}>
+                      <Ionicons name="create-outline" size={18} color={theme.primary} />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.rowIconBtn}
+                      onPress={() => handleDeleteProperty(prop)}
+                    >
+                      <Ionicons name="trash-outline" size={18} color={theme.danger} />
+                    </TouchableOpacity>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+          {/* Счетчики активного объекта */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+                {t('settings.sectionMeters', { property: activeProperty.name.toUpperCase() })}
+              </Text>
+              <TouchableOpacity onPress={openCreateMeter} style={styles.addPropLink}>
+                <Ionicons name="add" size={16} color={theme.primary} />
+                <Text style={[styles.addPropText, { color: theme.primary }]}>{t('common.add')}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+              {meters.length === 0 ? (
+                <Text style={[styles.emptyRowText, { color: theme.textSecondary }]}>
+                  {t('settings.noMeters')}
+                </Text>
+              ) : (
+                meters.map((meter, idx) => (
+                  <View
+                    key={meter.id}
+                    style={[
+                      styles.propertyRow,
+                      idx !== meters.length - 1 && {
+                        borderBottomWidth: 1,
+                        borderBottomColor: theme.borderLight,
                       },
                     ]}
                   >
-                    {option.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+                    <View style={[styles.meterIconBox, { backgroundColor: meter.color + '22' }]}>
+                      <Ionicons name={meter.icon as any} size={18} color={meter.color} />
+                    </View>
+
+                    <View style={styles.propertyInfo}>
+                      <Text style={[styles.propName, { color: theme.text, fontFamily: font.semibold }]}>
+                        {resolveMeterName(meter, t)}
+                      </Text>
+                      <Text style={[styles.propAddress, { color: theme.textSecondary }]}>
+                        {formatNumber(meter.currentReading)} {meter.unit}
+                        {meter.lastReadingDate
+                          ? ` • ${formatDate(meter.lastReadingDate, t)}`
+                          : ` • ${t('settings.meterNoReadings')}`}
+                        {meter.serialNumber ? ` • № ${meter.serialNumber}` : ''}
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity style={styles.rowIconBtn} onPress={() => openEditMeter(meter)}>
+                      <Ionicons name="create-outline" size={18} color={theme.primary} />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity style={styles.rowIconBtn} onPress={() => handleDeleteMeter(meter)}>
+                      <Ionicons name="trash-outline" size={18} color={theme.danger} />
+                    </TouchableOpacity>
+                  </View>
+                ))
+              )}
+            </View>
           </View>
-        </View>
-      </View>
-
-      {/* Объекты учета */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
-            {t('settings.sectionProperties')}
-          </Text>
-          <TouchableOpacity onPress={openCreateProperty} style={styles.addPropLink}>
-            <Ionicons name="add" size={16} color={theme.primary} />
-            <Text style={[styles.addPropText, { color: theme.primary }]}>{t('common.add')}</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
-          {properties.map((prop, idx) => {
-            const isSelected = prop.id === activeProperty.id;
-            const isLast = idx === properties.length - 1;
-
-            return (
-              <TouchableOpacity
-                key={prop.id}
-                style={[
-                  styles.propertyRow,
-                  !isLast && { borderBottomWidth: 1, borderBottomColor: theme.borderLight },
-                ]}
-                onPress={() => setActivePropertyId(prop.id)}
-                activeOpacity={0.7}
+      </>
+    ),
+    inspectors: <InspectorsSection />,
+    interface: (
+      <>
+          {/* Язык интерфейса */}
+          <View style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+              {t('settings.sectionLanguage')}
+            </Text>
+            <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+              <View style={styles.currencyRow}>
+                {LANGUAGES.map(option => {
+                  const isSelected = language === option.code;
+                  return (
+                    <TouchableOpacity
+                      key={option.code}
+                      style={[
+                        styles.currBtn,
+                        {
+                          backgroundColor: isSelected ? theme.primary : theme.surfaceLight,
+                          borderColor: isSelected ? theme.primary : theme.border,
+                        },
+                      ]}
+                      onPress={() => updateSettings({ language: option.code })}
+                    >
+                      <Text
+                        style={[
+                          styles.currBtnText,
+                          {
+                            color: isSelected ? theme.onPrimary : theme.text,
+                            fontFamily: isSelected ? font.extrabold : font.semibold,
+                          },
+                        ]}
+                      >
+                        {option.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          </View>
+          {/* Валюта */}
+          <View style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+              {t('settings.sectionCurrency')}
+            </Text>
+            <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+              <View style={styles.currencyRow}>
+                {currencies.map(curr => {
+                  const isSelected = settings.currency === curr;
+                  return (
+                    <TouchableOpacity
+                      key={curr}
+                      style={[
+                        styles.currBtn,
+                        {
+                          backgroundColor: isSelected ? theme.primary : theme.surfaceLight,
+                          borderColor: isSelected ? theme.primary : theme.border,
+                        },
+                      ]}
+                      onPress={() => updateSettings({ currency: curr })}
+                    >
+                      <Text
+                        style={[
+                          styles.currBtnText,
+                          {
+                            color: isSelected ? theme.onPrimary : theme.text,
+                            fontFamily: isSelected ? font.extrabold : font.semibold,
+                          },
+                        ]}
+                      >
+                        {curr}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          </View>
+          {/* Интерфейс и напоминания */}
+          <View style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+              {t('settings.sectionInterface')}
+            </Text>
+            <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+              <View
+                style={[styles.settingRow, { borderBottomWidth: 1, borderBottomColor: theme.borderLight }]}
               >
-                <View style={styles.propertyInfo}>
-                  <Text
-                    style={[
-                      styles.propName,
-                      { color: theme.text, fontFamily: isSelected ? font.bold : font.medium },
-                    ]}
-                  >
-                    {prop.name}
-                  </Text>
-                  {prop.address ? (
-                    <Text style={[styles.propAddress, { color: theme.textSecondary }]}>
-                      {prop.address}
+                <View style={styles.settingInfo}>
+                  <Ionicons name={isDark ? 'moon' : 'sunny'} size={20} color={theme.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.settingLabel, { color: theme.text }]}>
+                      {t('settings.darkTheme')}
                     </Text>
-                  ) : null}
-                </View>
-
-                {isSelected && (
-                  <View style={[styles.activeBadge, { backgroundColor: theme.primary + '20' }]}>
-                    <Text style={[styles.activeBadgeText, { color: theme.primary }]}>
-                      {t('settings.activeBadge')}
+                    <Text style={[styles.settingSub, { color: theme.textSecondary }]}>
+                      {isDark ? t('settings.darkThemeOn') : t('settings.darkThemeOff')}
                     </Text>
                   </View>
-                )}
+                </View>
 
-                <TouchableOpacity style={styles.rowIconBtn} onPress={() => openEditProperty(prop)}>
-                  <Ionicons name="create-outline" size={18} color={theme.primary} />
-                </TouchableOpacity>
+                <Switch
+                  value={isDark}
+                  onValueChange={val => updateSettings({ theme: val ? 'dark' : 'light' })}
+                  trackColor={{ false: theme.border, true: theme.primary }}
+                />
+              </View>
 
-                <TouchableOpacity
-                  style={styles.rowIconBtn}
-                  onPress={() => handleDeleteProperty(prop)}
-                >
-                  <Ionicons name="trash-outline" size={18} color={theme.danger} />
-                </TouchableOpacity>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
-
-      {/* Счетчики активного объекта */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
-            {t('settings.sectionMeters', { property: activeProperty.name.toUpperCase() })}
-          </Text>
-          <TouchableOpacity onPress={openCreateMeter} style={styles.addPropLink}>
-            <Ionicons name="add" size={16} color={theme.primary} />
-            <Text style={[styles.addPropText, { color: theme.primary }]}>{t('common.add')}</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
-          {meters.length === 0 ? (
-            <Text style={[styles.emptyRowText, { color: theme.textSecondary }]}>
-              {t('settings.noMeters')}
-            </Text>
-          ) : (
-            meters.map((meter, idx) => (
               <View
-                key={meter.id}
+                style={[styles.settingRow, { borderBottomWidth: 1, borderBottomColor: theme.borderLight }]}
+              >
+                <View style={styles.settingInfo}>
+                  <Ionicons name="notifications-outline" size={20} color={theme.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.settingLabel, { color: theme.text }]}>
+                      {t('settings.notifications')}
+                    </Text>
+                    <Text style={[styles.settingSub, { color: theme.textSecondary }]}>
+                      {Platform.OS === 'web'
+                        ? t('settings.notificationsWeb')
+                        : settings.notificationsEnabled
+                        ? t('settings.notificationsOn', {
+                            day: settings.reminderDay,
+                            hour: settings.reminderHour,
+                          })
+                        : t('settings.notificationsOff')}
+                    </Text>
+                  </View>
+                </View>
+
+                <Switch
+                  value={settings.notificationsEnabled && Platform.OS !== 'web'}
+                  disabled={Platform.OS === 'web'}
+                  onValueChange={async val => {
+                    await updateSettings({ notificationsEnabled: val });
+                    if (val) {
+                      // Разрешение могло быть отклонено на системном уровне
+                      appSuccess(
+                        t('settings.notificationsSetTitle'),
+                        t('settings.notificationsSetText')
+                      );
+                    }
+                  }}
+                  trackColor={{ false: theme.border, true: theme.primary }}
+                />
+              </View>
+
+              <View
                 style={[
-                  styles.propertyRow,
-                  idx !== meters.length - 1 && {
-                    borderBottomWidth: 1,
-                    borderBottomColor: theme.borderLight,
-                  },
+                  styles.settingColumn,
+                  { borderBottomWidth: 1, borderBottomColor: theme.borderLight },
                 ]}
               >
-                <View style={[styles.meterIconBox, { backgroundColor: meter.color + '22' }]}>
-                  <Ionicons name={meter.icon as any} size={18} color={meter.color} />
+                <Text style={[styles.settingLabel, { color: theme.text }]}>
+                  {t('settings.reminderDay')}
+                </Text>
+                <Text style={[styles.settingSub, { color: theme.textSecondary, marginBottom: 8 }]}>
+                  {t('settings.reminderDaySub', { day: settings.reminderDay })}
+                </Text>
+                <View style={styles.daySelectorRow}>
+                  {reminderDays.map(day => {
+                    const isSelected = settings.reminderDay === day;
+                    return (
+                      <TouchableOpacity
+                        key={day}
+                        style={[
+                          styles.dayBtn,
+                          {
+                            backgroundColor: isSelected ? theme.primary : theme.surfaceLight,
+                            borderColor: isSelected ? theme.primary : theme.border,
+                          },
+                        ]}
+                        onPress={() => updateSettings({ reminderDay: day })}
+                      >
+                        <Text
+                          style={[
+                            styles.dayBtnText,
+                            { color: isSelected ? theme.onPrimary : theme.textSecondary },
+                          ]}
+                        >
+                          {day}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
-
-                <View style={styles.propertyInfo}>
-                  <Text style={[styles.propName, { color: theme.text, fontFamily: font.semibold }]}>
-                    {resolveMeterName(meter, t)}
-                  </Text>
-                  <Text style={[styles.propAddress, { color: theme.textSecondary }]}>
-                    {formatNumber(meter.currentReading)} {meter.unit}
-                    {meter.lastReadingDate
-                      ? ` • ${formatDate(meter.lastReadingDate, t)}`
-                      : ` • ${t('settings.meterNoReadings')}`}
-                    {meter.serialNumber ? ` • № ${meter.serialNumber}` : ''}
-                  </Text>
-                </View>
-
-                <TouchableOpacity style={styles.rowIconBtn} onPress={() => openEditMeter(meter)}>
-                  <Ionicons name="create-outline" size={18} color={theme.primary} />
-                </TouchableOpacity>
-
-                <TouchableOpacity style={styles.rowIconBtn} onPress={() => handleDeleteMeter(meter)}>
-                  <Ionicons name="trash-outline" size={18} color={theme.danger} />
-                </TouchableOpacity>
               </View>
-            ))
-          )}
-        </View>
-      </View>
 
-      {/* Облачная синхронизация со сквозным шифрованием */}
-      <CloudSyncSection />
+              <View style={styles.settingColumn}>
+                <Text style={[styles.settingLabel, { color: theme.text }]}>
+                  {t('settings.reminderHour')}
+                </Text>
+                <Text style={[styles.settingSub, { color: theme.textSecondary, marginBottom: 8 }]}>
+                  {t('settings.reminderHourSub', { hour: settings.reminderHour })}
+                </Text>
+                <View style={styles.daySelectorRow}>
+                  {reminderHours.map(hour => {
+                    const isSelected = settings.reminderHour === hour;
+                    return (
+                      <TouchableOpacity
+                        key={hour}
+                        style={[
+                          styles.dayBtn,
+                          {
+                            backgroundColor: isSelected ? theme.primary : theme.surfaceLight,
+                            borderColor: isSelected ? theme.primary : theme.border,
+                          },
+                        ]}
+                        onPress={() => updateSettings({ reminderHour: hour })}
+                      >
+                        <Text
+                          style={[
+                            styles.dayBtnText,
+                            { color: isSelected ? theme.onPrimary : theme.textSecondary },
+                          ]}
+                        >
+                          {hour}:00
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            </View>
+          </View>
+      </>
+    ),
+    cloud: <CloudSyncSection />,
+    data: (
+      <>
+          {/* Данные и бэкап */}
+          <View style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+              {t('settings.sectionData')}
+            </Text>
+            <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
+              {/* Автокопии: восстановление после ошибочного импорта или сбоя */}
+              <RecoverySection />
 
-      {/* Контакты инспекторов по видам ресурсов */}
-      <InspectorsSection />
+              <TouchableOpacity
+                style={[styles.actionRow, { borderBottomWidth: 1, borderBottomColor: theme.borderLight }]}
+                onPress={handleExportToFile}
+                disabled={isBusy}
+              >
+                <View style={styles.actionLeft}>
+                  <Ionicons name="share-outline" size={20} color={theme.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.actionTitle, { color: theme.text }]}>
+                      {t('settings.exportFile')}
+                    </Text>
+                    <Text style={[styles.actionSub, { color: theme.textSecondary }]}>
+                      {t('settings.exportFileSub')}
+                    </Text>
+                  </View>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+              </TouchableOpacity>
 
-      {/* Виджеты рабочего стола (только Android) */}
-      <WidgetsSection />
+              <TouchableOpacity
+                style={[styles.actionRow, { borderBottomWidth: 1, borderBottomColor: theme.borderLight }]}
+                onPress={handleImportFromFile}
+                disabled={isBusy}
+              >
+                <View style={styles.actionLeft}>
+                  <Ionicons name="document-attach-outline" size={20} color={theme.primary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.actionTitle, { color: theme.text }]}>
+                      {t('settings.importFile')}
+                    </Text>
+                    <Text style={[styles.actionSub, { color: theme.textSecondary }]}>
+                      {t('settings.importFileSub')}
+                    </Text>
+                  </View>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+              </TouchableOpacity>
 
-      {/* Валюта */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
-          {t('settings.sectionCurrency')}
-        </Text>
-        <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
-          <View style={styles.currencyRow}>
-            {currencies.map(curr => {
-              const isSelected = settings.currency === curr;
-              return (
+              <TouchableOpacity
+                style={[styles.actionRow, { borderBottomWidth: 1, borderBottomColor: theme.borderLight }]}
+                onPress={handleCopyToClipboard}
+              >
+                <View style={styles.actionLeft}>
+                  <Ionicons name="copy-outline" size={20} color={theme.textSecondary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.actionTitle, { color: theme.text }]}>
+                      {t('settings.copyJson')}
+                    </Text>
+                    <Text style={[styles.actionSub, { color: theme.textSecondary }]}>
+                      {t('settings.copyJsonSub')}
+                    </Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.actionRow, { borderBottomWidth: 1, borderBottomColor: theme.borderLight }]}
+                onPress={() => setShowImportModal(true)}
+              >
+                <View style={styles.actionLeft}>
+                  <Ionicons name="clipboard-outline" size={20} color={theme.textSecondary} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.actionTitle, { color: theme.text }]}>
+                      {t('settings.pasteJson')}
+                    </Text>
+                    <Text style={[styles.actionSub, { color: theme.textSecondary }]}>
+                      {t('settings.pasteJsonSub')}
+                    </Text>
+                  </View>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.actionRow} onPress={handleResetData}>
+                <View style={styles.actionLeft}>
+                  <Ionicons name="trash-bin-outline" size={20} color={theme.danger} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.actionTitle, { color: theme.danger }]}>
+                      {t('settings.clearData')}
+                    </Text>
+                    <Text style={[styles.actionSub, { color: theme.textSecondary }]}>
+                      {t('settings.clearDataSub')}
+                    </Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            </View>
+          </View>
+      </>
+    ),
+    widgets: <WidgetsSection />,
+    about: (
+      <>
+          {/* О приложении */}
+          <View style={[styles.aboutCard, { backgroundColor: theme.surfaceLight }]}>
+            <Image source={require('../../assets/icon.png')} style={styles.aboutIcon} />
+            <Text style={[styles.aboutTitle, { color: theme.text }]}>{t('settings.aboutName')}</Text>
+            <Text style={[styles.aboutSub, { color: theme.textSecondary }]}>
+              {t('settings.aboutVersion', { version: APP_VERSION })}
+            </Text>
+            <Text style={[styles.aboutDesc, { color: theme.textMuted }]}>
+              {t('settings.aboutDesc')}
+            </Text>
+            <Text style={[styles.aboutDesc, { color: theme.textMuted }]}>
+              {storageBackend === 'sqlite' ? t('settings.storageEncrypted') : t('settings.storageWeb')}
+            </Text>
+          </View>
+      </>
+    ),
+  };
+
+  const current = group ? groups.find(item => item.id === group) : undefined;
+
+  return (
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {current ? (
+          // Внутри группы: кнопка «назад» к списку групп
+          <View style={styles.groupHeader}>
+            <TouchableOpacity
+              style={[styles.backBtn, { backgroundColor: theme.surfaceLight }]}
+              onPress={() => setGroup(null)}
+              accessibilityLabel={t('common.back')}
+            >
+              <Ionicons name="chevron-back" size={22} color={theme.text} />
+            </TouchableOpacity>
+            <Text style={[styles.groupTitle, { color: theme.text }]} numberOfLines={1}>
+              {current.title}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.header}>
+            <View style={styles.headerText}>
+              <Text style={[styles.title, { color: theme.text }]}>{t('settings.title')}</Text>
+              <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
+                {t('settings.subtitle')}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {group ? (
+          sections[group]
+        ) : (
+          // Список групп: короткая сводка в каждой строке, без длинных форм на одной странице
+          <View style={[styles.menu, { backgroundColor: theme.card, borderColor: theme.border }]}>
+            {groups
+              .filter(item => !item.hidden)
+              .map((item, index) => (
                 <TouchableOpacity
-                  key={curr}
+                  key={item.id}
                   style={[
-                    styles.currBtn,
-                    {
-                      backgroundColor: isSelected ? theme.primary : theme.surfaceLight,
-                      borderColor: isSelected ? theme.primary : theme.border,
-                    },
+                    styles.menuRow,
+                    index > 0 && { borderTopWidth: 1, borderTopColor: theme.borderLight },
                   ]}
-                  onPress={() => updateSettings({ currency: curr })}
+                  onPress={() => setGroup(item.id)}
+                  activeOpacity={0.7}
                 >
-                  <Text
-                    style={[
-                      styles.currBtnText,
-                      {
-                        color: isSelected ? theme.onPrimary : theme.text,
-                        fontFamily: isSelected ? font.extrabold : font.semibold,
-                      },
-                    ]}
-                  >
-                    {curr}
-                  </Text>
+                  <View style={[styles.menuIcon, { backgroundColor: theme.badgeBg }]}>
+                    <Ionicons name={item.icon} size={20} color={theme.primary} />
+                  </View>
+                  <View style={styles.menuText}>
+                    <Text style={[styles.menuTitle, { color: theme.text }]}>{item.title}</Text>
+                    <Text style={[styles.menuHint, { color: theme.textSecondary }]} numberOfLines={1}>
+                      {item.hint}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
                 </TouchableOpacity>
-              );
-            })}
+              ))}
           </View>
-        </View>
-      </View>
-
-      {/* Интерфейс и напоминания */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
-          {t('settings.sectionInterface')}
-        </Text>
-        <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
-          <View
-            style={[styles.settingRow, { borderBottomWidth: 1, borderBottomColor: theme.borderLight }]}
-          >
-            <View style={styles.settingInfo}>
-              <Ionicons name={isDark ? 'moon' : 'sunny'} size={20} color={theme.primary} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.settingLabel, { color: theme.text }]}>
-                  {t('settings.darkTheme')}
-                </Text>
-                <Text style={[styles.settingSub, { color: theme.textSecondary }]}>
-                  {isDark ? t('settings.darkThemeOn') : t('settings.darkThemeOff')}
-                </Text>
-              </View>
-            </View>
-
-            <Switch
-              value={isDark}
-              onValueChange={val => updateSettings({ theme: val ? 'dark' : 'light' })}
-              trackColor={{ false: theme.border, true: theme.primary }}
-            />
-          </View>
-
-          <View
-            style={[styles.settingRow, { borderBottomWidth: 1, borderBottomColor: theme.borderLight }]}
-          >
-            <View style={styles.settingInfo}>
-              <Ionicons name="notifications-outline" size={20} color={theme.primary} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.settingLabel, { color: theme.text }]}>
-                  {t('settings.notifications')}
-                </Text>
-                <Text style={[styles.settingSub, { color: theme.textSecondary }]}>
-                  {Platform.OS === 'web'
-                    ? t('settings.notificationsWeb')
-                    : settings.notificationsEnabled
-                    ? t('settings.notificationsOn', {
-                        day: settings.reminderDay,
-                        hour: settings.reminderHour,
-                      })
-                    : t('settings.notificationsOff')}
-                </Text>
-              </View>
-            </View>
-
-            <Switch
-              value={settings.notificationsEnabled && Platform.OS !== 'web'}
-              disabled={Platform.OS === 'web'}
-              onValueChange={async val => {
-                await updateSettings({ notificationsEnabled: val });
-                if (val) {
-                  // Разрешение могло быть отклонено на системном уровне
-                  appSuccess(
-                    t('settings.notificationsSetTitle'),
-                    t('settings.notificationsSetText')
-                  );
-                }
-              }}
-              trackColor={{ false: theme.border, true: theme.primary }}
-            />
-          </View>
-
-          <View
-            style={[
-              styles.settingColumn,
-              { borderBottomWidth: 1, borderBottomColor: theme.borderLight },
-            ]}
-          >
-            <Text style={[styles.settingLabel, { color: theme.text }]}>
-              {t('settings.reminderDay')}
-            </Text>
-            <Text style={[styles.settingSub, { color: theme.textSecondary, marginBottom: 8 }]}>
-              {t('settings.reminderDaySub', { day: settings.reminderDay })}
-            </Text>
-            <View style={styles.daySelectorRow}>
-              {reminderDays.map(day => {
-                const isSelected = settings.reminderDay === day;
-                return (
-                  <TouchableOpacity
-                    key={day}
-                    style={[
-                      styles.dayBtn,
-                      {
-                        backgroundColor: isSelected ? theme.primary : theme.surfaceLight,
-                        borderColor: isSelected ? theme.primary : theme.border,
-                      },
-                    ]}
-                    onPress={() => updateSettings({ reminderDay: day })}
-                  >
-                    <Text
-                      style={[
-                        styles.dayBtnText,
-                        { color: isSelected ? theme.onPrimary : theme.textSecondary },
-                      ]}
-                    >
-                      {day}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-
-          <View style={styles.settingColumn}>
-            <Text style={[styles.settingLabel, { color: theme.text }]}>
-              {t('settings.reminderHour')}
-            </Text>
-            <Text style={[styles.settingSub, { color: theme.textSecondary, marginBottom: 8 }]}>
-              {t('settings.reminderHourSub', { hour: settings.reminderHour })}
-            </Text>
-            <View style={styles.daySelectorRow}>
-              {reminderHours.map(hour => {
-                const isSelected = settings.reminderHour === hour;
-                return (
-                  <TouchableOpacity
-                    key={hour}
-                    style={[
-                      styles.dayBtn,
-                      {
-                        backgroundColor: isSelected ? theme.primary : theme.surfaceLight,
-                        borderColor: isSelected ? theme.primary : theme.border,
-                      },
-                    ]}
-                    onPress={() => updateSettings({ reminderHour: hour })}
-                  >
-                    <Text
-                      style={[
-                        styles.dayBtnText,
-                        { color: isSelected ? theme.onPrimary : theme.textSecondary },
-                      ]}
-                    >
-                      {hour}:00
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        </View>
-      </View>
-
-      {/* Данные и бэкап */}
-      <View style={styles.section}>
-        <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
-          {t('settings.sectionData')}
-        </Text>
-        <View style={[styles.card, { backgroundColor: theme.card, borderColor: theme.border }]}>
-          {/* Автокопии: восстановление после ошибочного импорта или сбоя */}
-          <RecoverySection />
-
-          <TouchableOpacity
-            style={[styles.actionRow, { borderBottomWidth: 1, borderBottomColor: theme.borderLight }]}
-            onPress={handleExportToFile}
-            disabled={isBusy}
-          >
-            <View style={styles.actionLeft}>
-              <Ionicons name="share-outline" size={20} color={theme.primary} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.actionTitle, { color: theme.text }]}>
-                  {t('settings.exportFile')}
-                </Text>
-                <Text style={[styles.actionSub, { color: theme.textSecondary }]}>
-                  {t('settings.exportFileSub')}
-                </Text>
-              </View>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.actionRow, { borderBottomWidth: 1, borderBottomColor: theme.borderLight }]}
-            onPress={handleImportFromFile}
-            disabled={isBusy}
-          >
-            <View style={styles.actionLeft}>
-              <Ionicons name="document-attach-outline" size={20} color={theme.primary} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.actionTitle, { color: theme.text }]}>
-                  {t('settings.importFile')}
-                </Text>
-                <Text style={[styles.actionSub, { color: theme.textSecondary }]}>
-                  {t('settings.importFileSub')}
-                </Text>
-              </View>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.actionRow, { borderBottomWidth: 1, borderBottomColor: theme.borderLight }]}
-            onPress={handleCopyToClipboard}
-          >
-            <View style={styles.actionLeft}>
-              <Ionicons name="copy-outline" size={20} color={theme.textSecondary} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.actionTitle, { color: theme.text }]}>
-                  {t('settings.copyJson')}
-                </Text>
-                <Text style={[styles.actionSub, { color: theme.textSecondary }]}>
-                  {t('settings.copyJsonSub')}
-                </Text>
-              </View>
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.actionRow, { borderBottomWidth: 1, borderBottomColor: theme.borderLight }]}
-            onPress={() => setShowImportModal(true)}
-          >
-            <View style={styles.actionLeft}>
-              <Ionicons name="clipboard-outline" size={20} color={theme.textSecondary} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.actionTitle, { color: theme.text }]}>
-                  {t('settings.pasteJson')}
-                </Text>
-                <Text style={[styles.actionSub, { color: theme.textSecondary }]}>
-                  {t('settings.pasteJsonSub')}
-                </Text>
-              </View>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={theme.textMuted} />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.actionRow} onPress={handleResetData}>
-            <View style={styles.actionLeft}>
-              <Ionicons name="trash-bin-outline" size={20} color={theme.danger} />
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.actionTitle, { color: theme.danger }]}>
-                  {t('settings.clearData')}
-                </Text>
-                <Text style={[styles.actionSub, { color: theme.textSecondary }]}>
-                  {t('settings.clearDataSub')}
-                </Text>
-              </View>
-            </View>
-          </TouchableOpacity>
-        </View>
-      </View>
-
-      {/* О приложении */}
-      <View style={[styles.aboutCard, { backgroundColor: theme.surfaceLight }]}>
-        <Image source={require('../../assets/icon.png')} style={styles.aboutIcon} />
-        <Text style={[styles.aboutTitle, { color: theme.text }]}>{t('settings.aboutName')}</Text>
-        <Text style={[styles.aboutSub, { color: theme.textSecondary }]}>
-          {t('settings.aboutVersion')}
-        </Text>
-        <Text style={[styles.aboutDesc, { color: theme.textMuted }]}>
-          {t('settings.aboutDesc')}
-        </Text>
-        <Text style={[styles.aboutDesc, { color: theme.textMuted }]}>
-          {storageBackend === 'sqlite' ? t('settings.storageEncrypted') : t('settings.storageWeb')}
-        </Text>
-      </View>
+        )}
+      </ScrollView>
 
       {/* Модальное окно объекта */}
       <AppModal
@@ -1077,11 +1192,56 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({ onClose }) => {
       </AppModal>
 
       <View style={{ height: 40 }} />
-    </ScrollView>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
+  menu: {
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  menuIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuText: {
+    flex: 1,
+  },
+  menuTitle: {
+    fontSize: fontSize.md,
+    fontFamily: font.semibold,
+  },
+  menuHint: {
+    fontSize: fontSize.xs,
+    fontFamily: font.regular,
+    marginTop: 2,
+  },
+  groupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 18,
+  },
+  backBtn: {
+    ...button.icon,
+  },
+  groupTitle: {
+    flex: 1,
+    fontSize: fontSize.xl,
+    fontFamily: font.bold,
+  },
   container: {
     flex: 1,
   },
@@ -1107,9 +1267,6 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     fontFamily: font.regular,
     marginTop: 2,
-  },
-  closeBtn: {
-    ...button.icon,
   },
   section: {
     marginBottom: 18,

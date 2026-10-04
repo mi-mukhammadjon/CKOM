@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Animated, Easing, View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useApp } from '../context/AppContext';
 import { font, fontSize, button, radius } from '../constants/theme';
@@ -9,11 +9,33 @@ const APP_LOGO = require('../../assets/icon.png');
 
 interface HeaderProps {
   onOpenSettings?: () => void;
+  /** Настройки открыты: шестеренка превращается в крестик */
+  settingsOpen?: boolean;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onOpenSettings }) => {
+export const Header: React.FC<HeaderProps> = ({ onOpenSettings, settingsOpen = false }) => {
   const { theme, isDark, activeProperty, properties, setActivePropertyId, updateSettings, t } = useApp();
   const [showPropertyPicker, setShowPropertyPicker] = useState(false);
+
+  // 0 — шестеренка, 1 — крестик; иконки сменяют друг друга с поворотом
+  const morph = useRef(new Animated.Value(settingsOpen ? 1 : 0)).current;
+  useEffect(() => {
+    Animated.timing(morph, {
+      toValue: settingsOpen ? 1 : 0,
+      duration: 220,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [settingsOpen, morph]);
+
+  const gearStyle = {
+    opacity: morph.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }),
+    transform: [{ rotate: morph.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '90deg'] }) }],
+  };
+  const closeStyle = {
+    opacity: morph,
+    transform: [{ rotate: morph.interpolate({ inputRange: [0, 1], outputRange: ['-90deg', '0deg'] }) }],
+  };
 
   const toggleTheme = () => {
     updateSettings({ theme: isDark ? 'light' : 'dark' });
@@ -55,9 +77,14 @@ export const Header: React.FC<HeaderProps> = ({ onOpenSettings }) => {
             style={[styles.iconButton, { backgroundColor: theme.surfaceLight }]}
             onPress={onOpenSettings}
             activeOpacity={0.7}
-            accessibilityLabel={t('header.openSettings')}
+            accessibilityLabel={settingsOpen ? t('common.close') : t('header.openSettings')}
           >
-            <Ionicons name="settings-outline" size={20} color={theme.textSecondary} />
+            <Animated.View style={[styles.morphIcon, gearStyle]}>
+              <Ionicons name="settings-outline" size={20} color={theme.textSecondary} />
+            </Animated.View>
+            <Animated.View style={[styles.morphIcon, closeStyle]}>
+              <Ionicons name="close" size={22} color={theme.text} />
+            </Animated.View>
           </TouchableOpacity>
         )}
       </View>
@@ -182,6 +209,10 @@ const styles = StyleSheet.create({
   },
   iconButton: {
     ...button.icon,
+  },
+  // Обе иконки лежат друг на друге в центре кнопки
+  morphIcon: {
+    position: 'absolute',
   },
   modalOverlay: {
     flex: 1,
