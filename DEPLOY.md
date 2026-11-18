@@ -67,6 +67,8 @@ git tag v1.3.1
 git push origin main v1.3.1
 ```
 
+Yoki tegsiz: GitHub'da **Actions → Release Android APK → Run workflow** — teg `app.json` dagi versiyadan avtomatik yaratiladi.
+
 `Release Android APK` workflow'i tekshiruvlarni (tiplar, lint, testlar) o'tkazadi, teg `app.json` dagi versiyaga mos kelishini tekshiradi, APK'ni yig'ib, GitHub Releases'ga yuklaydi. Yuklab olish sahifasi har doim eng so'nggi relizga havola beradi.
 
 ## 5. Imzolash kaliti (muhim)
