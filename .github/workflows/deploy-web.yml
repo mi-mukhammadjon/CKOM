@@ -17,7 +17,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
   build:
+    needs: checks
     runs-on: ubuntu-latest
     env:
       # Адрес и публичный ключ Supabase: Settings → Secrets and variables → Actions → Variables
@@ -33,11 +37,6 @@ jobs:
           cache: npm
 
       - run: npm ci
-
-      - name: Typecheck and tests
-        run: |
-          npx tsc --noEmit
-          npx jest --ci
 
       - name: Export web build
         run: npx expo export --platform web --output-dir dist

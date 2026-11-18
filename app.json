@@ -2,7 +2,7 @@
   "expo": {
     "name": "CKOM - Учет коммунальных услуг",
     "slug": "ckom-mobile",
-    "version": "1.2.1",
+    "version": "1.3.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -27,8 +27,7 @@
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.RECORD_AUDIO"
       ],
-      "allowBackup": false,
-      "versionCode": 5
+      "allowBackup": false
     },
     "web": {
       "favicon": "./assets/favicon.png"
