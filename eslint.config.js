@@ -1,11 +1,16 @@
 // https://docs.expo.dev/guides/using-eslint/
 const { defineConfig } = require('eslint/config');
 const expoConfig = require('eslint-config-expo/flat');
+const globals = require('globals');
 
 module.exports = defineConfig([
   expoConfig,
   {
     ignores: ['dist/*', 'android/*', 'ios/*', 'public/*'],
+  },
+  {
+    files: ['**/__tests__/**/*.js'],
+    languageOptions: { globals: globals.jest },
   },
   {
     // Правила React Compiler. Компилятор в проекте не включен, а анимации
