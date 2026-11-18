@@ -64,24 +64,29 @@
 - Резервное копирование **в файл**: `ckom-backup-ГГГГ-ММ-ДД.json` через системное меню «Поделиться» (Telegram, Google Drive, Файлы) и восстановление выбором файла. Копирование/вставка JSON текстом остались как быстрый вариант.
 - Валюты расчетов: сум (UZS), ₽ (RUB), $ (USD), ₸ (KZT) — валюта тарифов всегда следует за выбранной.
 - Чистый первый запуск: один объект «Uy» с нулевыми счетчиками, никаких демо-данных. Демо-записи, оставшиеся от прежних версий, удаляются автоматически при обновлении (данные пользователя не затрагиваются).
-- 100% автономность: данные сохраняются локально (`AsyncStorage`) и доступны без интернета.
+- 100% автономность: на телефоне данные хранятся в **зашифрованной базе SQLite (SQLCipher)**, ключ лежит в Android Keystore; ежедневные автокопии базы позволяют откатить ошибку. В вебе — хранилище браузера.
+- **Облачная синхронизация со сквозным шифрованием** (Supabase): данные шифруются AES-256-GCM ключом из вашего пароля прямо на устройстве, сервер видит только шифротекст. Несколько устройств сливаются трехсторонним слиянием без потери правок; пароль можно сменить, копия перешифровывается.
+- Виджеты рабочего стола Android (2×1, 4×2, 4×4) и отчеты PDF/Excel.
+- Фото счетчиков и квитанций хранятся только на устройстве (в облако и файл копии не попадают).
 
-## 📦 Готовый офлайн APK (Android)
+## 📦 APK для Android
 
-Сформирован готовый установочный файл приложения:
-- 📍 **Путь:** [`d:/django/KCOM/CKOM-v1.0.apk`](file:///d:/django/KCOM/CKOM-v1.0.apk) (или `android/app/build/outputs/apk/release/app-release.apk`; ARM-сборка для смартфонов: `armeabi-v7a`, `arm64-v8a`)
-- 📱 **Установка:** Скопируйте файл `CKOM-v1.0.apk` на Android смартфон (через USB-кабель, Telegram или Google Drive) и нажмите для установки. Никакой Expo Go или интернет не требуются — приложение работает 100% автономно!
+Готовые APK публикуются в **GitHub Releases** этого репозитория (последний релиз — на странице загрузки GitHub Pages). Сборка и выпуск автоматизированы: тег `vX.Y.Z` запускает workflow `Release Android APK`. Как выпустить версию и настроить ключ подписи — в [`DEPLOY.md`](DEPLOY.md).
 
-### Команда для повторной сборки APK:
+- 📱 **Установка:** скачайте `CKOM.apk` на Android-смартфон и откройте его. Expo Go и интернет не нужны.
+
+### Локальная сборка APK
 ```bash
-npm run build:apk
+npx expo prebuild --platform android
+npm run build:apk        # macOS / Linux
+npm run build:apk:win    # Windows
 ```
 
 > ⚠️ **Сборка требует JDK 17.** Если `JAVA_HOME` указывает на JBR из Android Studio (JDK 24/25), сборка падает на шаге
 > `configureCMakeRelWithDebInfo` с сообщением `WARNING: A restricted method in java.lang.System has been called` —
 > AGP принимает предупреждение новой JVM за ошибку. Решение: указать JDK 17, например
 > ```bash
-> cd android && ./gradlew.bat assembleRelease "-Dorg.gradle.java.home=C:\Program Files\Eclipse Adoptium\jdk-17.0.20.8-hotspot"
+> cd android && gradlew.bat assembleRelease "-Dorg.gradle.java.home=C:\Program Files\Eclipse Adoptium\jdk-17.0.20.8-hotspot"
 > ```
 > или прописать `org.gradle.java.home` в `android/gradle.properties` (значение теряется после `expo prebuild`).
 
@@ -115,9 +120,11 @@ npm run web
 npx expo start --web
 ```
 
-### 3. Проверка типов и кода
+### 3. Проверка кода
 ```bash
-npx tsc --noEmit
+npm run check     # типы + линтер + тесты (то же, что в CI)
+npm run lint
+npm test
 npx expo-doctor
 ```
 
@@ -126,36 +133,22 @@ npx expo-doctor
 ## 📁 Структура проекта
 
 ```
-KCOM/
-├── App.tsx                     # Главная точка входа, навигатор и обертка провайдеров
-├── app.json                    # Конфигурация Expo и метаданные приложения
-├── package.json                # Зависимости и скрипты
+CKOM/
+├── App.tsx                 # Точка входа, переключение вкладок, провайдеры
+├── app.json / app.config.js# Конфигурация Expo; versionCode выводится из version
+├── plugins/                # Config-плагины (подпись release-сборки)
+├── supabase/migrations/    # Таблица зашифрованных хранилищ + RLS
 ├── src/
-│   ├── types/
-│   │   └── index.ts            # Модели счетчиков, тарифов, записей и настроек
-│   ├── constants/
-│   │   ├── defaults.ts         # Начальные данные, реалистичные тарифы и история
-│   │   └── theme.ts            # Цветовые палитры для Dark и Light тем
-│   ├── utils/
-│   │   └── calculator.ts       # Ступенчатый расчет (до 3 ступеней), форматирование, отчет для Telegram
-│   ├── services/
-│   │   ├── storage.ts          # Локальное хранилище AsyncStorage + миграция схемы
-│   │   ├── notifications.ts    # Ежемесячные локальные уведомления о сдаче показаний
-│   │   └── backup.ts           # Экспорт/импорт резервной копии в виде JSON-файла
-│   ├── context/
-│   │   └── AppContext.tsx      # Реактивное управление состоянием приложения
-│   ├── components/
-│   │   ├── Header.tsx          # Верхняя панель со сменой объектов и темы
-│   │   ├── MeterCard.tsx       # Карточка счетчика с быстрым вводом
-│   │   ├── QuickStats.tsx      # Виджет расходов за месяц и статуса сдачи
-│   │   └── CustomTabBar.tsx    # Нижняя навигационная панель (5 разделов)
-│   └── screens/
-│       ├── DashboardScreen.tsx # Главный экран с обзором счетчиков
-│       ├── ReadingEntryScreen.tsx # Экран ввода с живым калькулятором
-│       ├── HistoryScreen.tsx   # Журнал показаний и экспорт отчетов
-│       ├── TariffsScreen.tsx   # Настройка тарифов и социальных норм
-│       ├── AnalyticsScreen.tsx # Графика динамики и структура затрат
-│       └── SettingsScreen.tsx  # Настройки объектов, валюты и бэкап
+│   ├── context/            # AppContext: состояние, очередь правок, синхронизация
+│   ├── services/db/        # SQLite (SQLCipher), AsyncStorage для веба, снимки
+│   ├── sync/               # Шифрование, трехстороннее слияние, обмен с Supabase
+│   ├── screens/            # Главная, ввод, журнал, тарифы, аналитика, настройки
+│   ├── components/         # Общие компоненты и разделы настроек
+│   ├── reports/            # Отчеты PDF / Excel
+│   ├── widgets/            # Виджеты рабочего стола Android
+│   ├── utils/              # Расчеты по тарифам, цепочки показаний, календарь
+│   └── i18n/               # Русский и узбекский словари
+└── .github/workflows/      # Проверки, веб на GitHub Pages, релиз APK
 ```
 
 ---
@@ -164,7 +157,9 @@ KCOM/
 - **Expo SDK 57**
 - **React Native 0.86**
 - **TypeScript**
-- **AsyncStorage** (локальная база данных)
+- **expo-sqlite + SQLCipher** (зашифрованная локальная база), AsyncStorage в вебе
+- **Supabase** + **@noble/ciphers** (облачная синхронизация со сквозным шифрованием)
+- **Jest** + **ESLint** (`eslint-config-expo`)
 - **Expo Vector Icons** (Ionicons)
 - **Expo Clipboard** (мгновенный экспорт отчетов)
 - **Expo Notifications** (ежемесячные напоминания)

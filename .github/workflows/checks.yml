@@ -1,0 +1,29 @@
+# Проверки кода: типы, линтер, тесты. Запускаются на каждый pull request
+# и вызываются из сборки веб-версии и релиза APK.
+name: Checks
+
+on:
+  pull_request:
+  workflow_call:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx eslint .
+
+      - name: Tests
+        run: npx jest --ci

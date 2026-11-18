@@ -58,19 +58,46 @@ Push'dan keyin `Deploy web to GitHub Pages` workflow'i testlarni o'tkazib, saytn
 
 ## 4. APK chiqarish
 
-Versiya tegi qo'yilsa, `Release Android APK` workflow'i APK'ni yig'ib, GitHub Releases'ga yuklaydi:
+Versiya faqat bitta joyda — `app.json` dagi `version` da beriladi. Android uchun `versionCode` undan avtomatik hisoblanadi (`1.3.0 → 10300`), qo'lda oshirish shart emas.
 
 ```bash
-git tag v1.1.1
-git push origin v1.1.1
+# app.json → "version": "1.3.1"
+git commit -am "1.3.1"
+git tag v1.3.1
+git push origin main v1.3.1
 ```
 
-Yuklab olish sahifasi har doim eng so'nggi relizga havola beradi.
+`Release Android APK` workflow'i tekshiruvlarni (tiplar, lint, testlar) o'tkazadi, teg `app.json` dagi versiyaga mos kelishini tekshiradi, APK'ni yig'ib, GitHub Releases'ga yuklaydi. Yuklab olish sahifasi har doim eng so'nggi relizga havola beradi.
 
-Har bir yangi relizdan oldin `app.json` dagi `version` va `android.versionCode` ni oshiring — aks holda Android eski APK'ni yangisining ustiga o'rnatishga ruxsat beradi.
+## 5. Imzolash kaliti (muhim)
+
+1.3.0 gacha bo'lgan APK'lar React Native'ning **hammaga ochiq debug kaliti** bilan imzolangan. Bu kalit internetda bor, ya'ni istalgan odam `com.ckom.app` nomli soxta "yangilanish" yasab, foydalanuvchi telefonida ilova o'rniga o'rnatishi mumkin.
+
+Workflow endi o'z kalitingizni qo'llab-quvvatlaydi. Kalit sekretlarda bo'lmasa, eski imzo saqlanadi va workflow ogohlantirish chiqaradi.
+
+**O'z kalitingizga o'tish:**
+
+1. Kalit yarating (bir marta, kompyuteringizda):
+
+   ```bash
+   keytool -genkeypair -v -storetype PKCS12 -keystore ckom-release.keystore \
+     -alias ckom -keyalg RSA -keysize 4096 -validity 10000
+   ```
+
+2. **Kalitni va parolni ishonchli joyda saqlang** (parol menejeri + oflayn nusxa). Kalit yo'qolsa, ilovani hech qachon yangilab bo'lmaydi.
+3. Repo **Settings → Secrets and variables → Actions → Secrets** ga qo'shing:
+   - `ANDROID_KEYSTORE_BASE64` — `base64 -w0 ckom-release.keystore` natijasi (Windows: `certutil -encode`)
+   - `ANDROID_KEYSTORE_PASSWORD` — keystore paroli
+   - `ANDROID_KEY_ALIAS` — `ckom`
+   - `ANDROID_KEY_PASSWORD` — kalit paroli (PKCS12'da keystore paroli bilan bir xil)
+
+⚠️ **Imzo o'zgargach, eski APK ustiga yangisi o'rnatilmaydi.** Foydalanuvchilar eski ilovani o'chirib, yangisini o'rnatishi kerak bo'ladi, bunda telefondagi ma'lumotlar o'chadi. O'tishdan oldin hammaga bulutga sinxronlashni yoki **Sozlamalar → zaxira faylini saqlash** ni bajarishni ayting, yangi ilovada esa kirish yoki fayldan tiklash orqali ma'lumotlarni qaytarish mumkin. O'tishni bir marta, imkon qadar ertaroq qiling.
+
+Har bir relizda workflow jurnalidagi **Show signing certificate** qadamida imzoning SHA-256 izi ko'rsatiladi.
 
 ## Muhim
 
-- **Parol tiklanmaydi.** Bu uchdan-uchgacha shifrlashning narxi: parol unutilsa, bulutdagi nusxani ochib bo'lmaydi. Telefondagi ma'lumotlar qoladi; yangi hisob ochib, ularni qayta yuklash mumkin.
+- **Parol tiklanmaydi.** Bu uchdan-uchgacha shifrlashning narxi: parol unutilsa, bulutdagi nusxani ochib bo'lmaydi. Telefondagi ma'lumotlar qoladi; yangi hisob ochib, ularni qayta yuklash mumkin. Parolni eslab turgan holda uni **Sozlamalar → Bulut → Parolni o'zgartirish** orqali almashtirish mumkin: bulutdagi nusxa yangi kalit bilan qayta shifrlanadi, boshqa qurilmalar esa yangi parolni so'raydi.
+- **Supabase'da "Secure password change"** yoqilgan bo'lsa, parolni almashtirish qayta autentifikatsiya talab qiladi. Bu sozlamani o'chiq qoldiring (standart holat shunday).
 - **Suratlar sinxronlanmaydi.** Hisoblagich va kvitansiya suratlari faqat ular olingan qurilmada qoladi.
-- **Veb-versiyada** ma'lumotlar brauzer xotirasida saqlanadi (qurilmadagidek shifrlangan baza yo'q). Sinxronlash esa vebda ham shifrlangan.
+- **Veb-versiyada** ma'lumotlar brauzer xotirasida saqlanadi (qurilmadagidek shifrlangan baza yo'q). Sinxronlash esa vebda ham shifrlangan. Shifrlash kaliti faqat brauzer oynasi ochiq turganda (`sessionStorage`) saqlanadi: oyna yopilgach, parol qayta so'raladi.

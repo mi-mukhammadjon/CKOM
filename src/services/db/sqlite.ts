@@ -16,8 +16,7 @@ import { DEFAULT_SETTINGS } from '../../constants/defaults';
 import { cleanAppData, normalizeAppData } from '../normalize';
 import { readLegacyAsyncStorageData, markLegacyMigrated, purgeLegacyAsyncStorage } from './legacy';
 import { createReplacementKey, getOrCreateDatabaseKey, readDatabaseKey } from './encryptionKey';
-import { RecoveryCandidate } from './types';
-import { AppRepository } from './types';
+import { RecoveryCandidate , AppRepository } from './types';
 
 /** Зашифрованная база (SQLCipher, AES-256) */
 const DATABASE_NAME = 'ckom-secure.db';

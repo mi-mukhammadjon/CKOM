@@ -21,10 +21,24 @@ function formatTime(iso: string, t: ReturnType<typeof useApp>['t']): string {
 
 /** Раздел настроек: вход в аккаунт и синхронизация со сквозным шифрованием */
 export const CloudSyncSection: React.FC = () => {
-  const { theme, cloud, cloudSignIn, cloudSignUp, cloudSignOut, cloudSyncNow, cloudDeleteCopy, t } = useApp();
+  const {
+    theme,
+    cloud,
+    cloudSignIn,
+    cloudSignUp,
+    cloudSignOut,
+    cloudSyncNow,
+    cloudDeleteCopy,
+    cloudUnlock,
+    cloudChangePassword,
+    t,
+  } = useApp();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState<'in' | 'up' | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [changing, setChanging] = useState(false);
+  const [busy, setBusy] = useState<'in' | 'up' | 'unlock' | 'change' | null>(null);
+  const needPassword = cloud.error === 'NEED_PASSWORD';
 
   const errorText = (code: string) => t(`cloud.error.${code}` as TranslationKey);
 
@@ -58,6 +72,60 @@ export const CloudSyncSection: React.FC = () => {
     }
   };
 
+  const unlock = async () => {
+    if (!password) return;
+    setBusy('unlock');
+    try {
+      await cloudUnlock(password);
+      setPassword('');
+    } catch (e) {
+      appError(t('common.error'), errorText(e instanceof SyncError ? e.code : 'UNKNOWN'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const changePassword = async () => {
+    if (newPassword.length < 8) {
+      appError(t('common.error'), t('cloud.shortPassword'));
+      return;
+    }
+    if (newPassword === password) {
+      appError(t('common.error'), t('cloud.samePassword'));
+      return;
+    }
+    setBusy('change');
+    try {
+      await cloudChangePassword(password, newPassword);
+      setPassword('');
+      setNewPassword('');
+      setChanging(false);
+      appSuccess(t('cloud.passwordChangedTitle'), t('cloud.passwordChangedText'));
+    } catch (e) {
+      appError(t('common.error'), errorText(e instanceof SyncError ? e.code : 'UNKNOWN'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const inputStyle = [
+    styles.input,
+    { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.text },
+  ];
+
+  const passwordInput = (value: string, onChange: (v: string) => void, autoComplete: 'password' | 'new-password') => (
+    <TextInput
+      style={inputStyle}
+      value={value}
+      onChangeText={onChange}
+      placeholder={t('cloud.passwordHint')}
+      placeholderTextColor={theme.textMuted}
+      secureTextEntry
+      autoCapitalize="none"
+      autoComplete={autoComplete}
+    />
+  );
+
   const confirmSignOut = () =>
     appAlert(t('cloud.signOutTitle'), t('cloud.signOutText'), [
       { text: t('common.cancel'), style: 'cancel' },
@@ -90,6 +158,7 @@ export const CloudSyncSection: React.FC = () => {
           <Text style={[styles.badgeText, { color: theme.success }]}>{t('cloud.e2e')}</Text>
         </View>
         <Text style={[styles.hint, { color: theme.textSecondary }]}>{t('cloud.hint')}</Text>
+        <Text style={[styles.hint, { color: theme.textMuted }]}>{t('cloud.photosNote')}</Text>
 
         {!cloud.configured ? (
           <Text style={[styles.notice, { color: theme.textMuted }]}>{t('cloud.notConfigured')}</Text>
@@ -186,6 +255,63 @@ export const CloudSyncSection: React.FC = () => {
                 )}
               </TouchableOpacity>
             </View>
+            {needPassword && (
+              <View>
+                <Text style={[styles.label, { color: theme.textSecondary }]}>{t('cloud.unlockTitle')}</Text>
+                <Text style={[styles.hint, { color: theme.textSecondary, marginBottom: 8 }]}>
+                  {t('cloud.unlockText')}
+                </Text>
+                {passwordInput(password, setPassword, 'password')}
+                <TouchableOpacity
+                  style={[styles.btn, styles.singleBtn, { backgroundColor: theme.primary }]}
+                  onPress={unlock}
+                  disabled={!!busy || !password}
+                >
+                  {busy === 'unlock' ? (
+                    <ActivityIndicator size="small" color={theme.onPrimary} />
+                  ) : (
+                    <Text style={[buttonText.md, { color: theme.onPrimary }]}>{t('cloud.unlock')}</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            )}
+            {!needPassword && changing && (
+              <View>
+                <Text style={[styles.label, { color: theme.textSecondary }]}>{t('cloud.currentPassword')}</Text>
+                {passwordInput(password, setPassword, 'password')}
+                <Text style={[styles.label, { color: theme.textSecondary }]}>{t('cloud.newPassword')}</Text>
+                {passwordInput(newPassword, setNewPassword, 'new-password')}
+                <View style={styles.buttons}>
+                  <TouchableOpacity
+                    style={[styles.btn, { backgroundColor: theme.surfaceLight }]}
+                    onPress={() => {
+                      setChanging(false);
+                      setPassword('');
+                      setNewPassword('');
+                    }}
+                    disabled={!!busy}
+                  >
+                    <Text style={[buttonText.md, { color: theme.text }]}>{t('common.cancel')}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.btn, { backgroundColor: theme.primary }]}
+                    onPress={changePassword}
+                    disabled={!!busy || !password || !newPassword}
+                  >
+                    {busy === 'change' ? (
+                      <ActivityIndicator size="small" color={theme.onPrimary} />
+                    ) : (
+                      <Text style={[buttonText.md, { color: theme.onPrimary }]}>{t('cloud.changePassword')}</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+            {!needPassword && !changing && (
+              <TouchableOpacity style={styles.linkBtn} onPress={() => setChanging(true)}>
+                <Text style={[styles.linkText, { color: theme.primary }]}>{t('cloud.changePassword')}</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={styles.linkBtn} onPress={confirmDelete}>
               <Text style={[styles.linkText, { color: theme.danger }]}>{t('cloud.deleteCopy')}</Text>
             </TouchableOpacity>
@@ -257,6 +383,10 @@ const styles = StyleSheet.create({
   btn: {
     ...button.md,
     flex: 1,
+  },
+  singleBtn: {
+    flex: 0,
+    marginTop: 12,
   },
   status: {
     flexDirection: 'row',
