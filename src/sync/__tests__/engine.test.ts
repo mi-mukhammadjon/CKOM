@@ -4,6 +4,10 @@
  */
 import { AppData, ReadingEntry } from '../../types';
 
+import { changePassword, signIn, signUp, syncNow, SyncError, unlockVault } from '../engine';
+import { cleanAppData } from '../../services/normalize';
+import { AppRepository } from '../../services/db/types';
+
 // ---------- Подмена окружения: у каждого «устройства» свои хранилища ----------
 
 type Store = Map<string, string>;
@@ -32,6 +36,7 @@ jest.mock('../crypto', () => ({ ...jest.requireActual('../crypto'), VAULT_KDF_IT
 const mockUsers = new Map<string, { id: string; password: string }>();
 const mockSessions: Record<string, string | null> = {};
 const mockVaults = new Map<string, Record<string, any>>();
+let mockFailUpdateUser = false;
 
 function mockTable() {
   const filters: [string, unknown][] = [];
@@ -39,7 +44,11 @@ function mockTable() {
   const api: any = {
     select: () => api,
     eq: (k: string, v: unknown) => (filters.push([k, v]), api),
-    maybeSingle: async () => ({ data: [...mockVaults.values()].find(match) ?? null, error: null }),
+    maybeSingle: async () => {
+      const row = [...mockVaults.values()].find(match);
+      // Как и настоящий сервер, отдаем копию строки
+      return { data: row ? { ...row } : null, error: null };
+    },
     insert: async (row: Record<string, any>) => {
       if (mockVaults.has(row.user_id)) return { error: { message: 'duplicate key' } };
       mockVaults.set(row.user_id, { ...row });
@@ -83,13 +92,17 @@ jest.mock('../supabase', () => ({
         return { error: null };
       },
       signOut: async () => void (mockSessions[mockCurrent] = null),
+      updateUser: async ({ password }: { password: string }) => {
+        if (mockFailUpdateUser) return { error: { message: 'update failed' } };
+        const id = mockSessions[mockCurrent];
+        const entry = [...mockUsers.values()].find(u => u.id === id);
+        if (!entry) return { error: { message: 'not signed in' } };
+        entry.password = password;
+        return { error: null };
+      },
     },
   }),
 }));
-
-import { signIn, signUp, syncNow, SyncError } from '../engine';
-import { cleanAppData } from '../../services/normalize';
-import { AppRepository } from '../../services/db/types';
 
 const repository = {
   getMeta: async (k: string) => mockDevice().meta.get(k) ?? null,
@@ -119,6 +132,7 @@ beforeEach(() => {
   mockVaults.clear();
   Object.keys(mockSessions).forEach(k => delete mockSessions[k]);
   mockCurrent = 'phone';
+  mockFailUpdateUser = false;
 });
 
 describe('синхронизация двух устройств', () => {
@@ -185,5 +199,61 @@ describe('синхронизация двух устройств', () => {
 
   it('без входа синхронизация не выполняется', async () => {
     await expect(syncNow(cleanAppData(), repository)).rejects.toBeInstanceOf(SyncError);
+  });
+});
+
+describe('смена пароля', () => {
+  async function twoDevices() {
+    await signUp('me@mail.uz', 'Parol-123');
+    await syncNow(withReadings([reading('a', 150)]), repository);
+    mockCurrent = 'web';
+    await signIn('me@mail.uz', 'Parol-123');
+    await syncNow(cleanAppData(), repository);
+    mockCurrent = 'phone';
+  }
+
+  it('копия перешифровывается, другое устройство открывает ее новым паролем', async () => {
+    await twoDevices();
+    const before = { ...[...mockVaults.values()][0] };
+    await changePassword('Parol-123', 'Yangi-parol-9');
+    const after = [...mockVaults.values()][0];
+    expect(after.kdf_salt).not.toBe(before.kdf_salt);
+    expect(after.version).toBe(before.version + 1);
+
+    // На этом устройстве синхронизация продолжает работать без повторного ввода
+    await expect(syncNow(withReadings([reading('a', 150)]), repository)).resolves.toBeDefined();
+
+    // Второе устройство просит пароль, а после ввода нового получает данные
+    mockCurrent = 'web';
+    await expect(syncNow(withReadings([reading('a', 150)]), repository)).rejects.toMatchObject({
+      code: 'NEED_PASSWORD',
+    });
+    await expect(unlockVault('Parol-123')).rejects.toMatchObject({ code: 'WRONG_PASSWORD' });
+    await unlockVault('Yangi-parol-9');
+    const result = await syncNow(withReadings([reading('a', 150), reading('web', 170)]), repository);
+    expect(result.status).not.toBe('pulled');
+
+    // Старым паролем войти больше нельзя
+    mockCurrent = 'tablet';
+    await expect(signIn('me@mail.uz', 'Parol-123')).rejects.toMatchObject({ code: 'INVALID_CREDENTIALS' });
+    await signIn('me@mail.uz', 'Yangi-parol-9');
+  });
+
+  it('неверный текущий пароль ничего не меняет', async () => {
+    await twoDevices();
+    const before = { ...[...mockVaults.values()][0] };
+    await expect(changePassword('neto-parol', 'Yangi-parol-9')).rejects.toMatchObject({ code: 'WRONG_PASSWORD' });
+    expect([...mockVaults.values()][0]).toEqual(before);
+  });
+
+  it('если сервер не сменил пароль, копия возвращается к прежнему ключу', async () => {
+    await twoDevices();
+    mockFailUpdateUser = true;
+    await expect(changePassword('Parol-123', 'Yangi-parol-9')).rejects.toBeInstanceOf(SyncError);
+    mockFailUpdateUser = false;
+    // Второе устройство со старым ключом по-прежнему читает копию
+    mockCurrent = 'web';
+    const result = await syncNow(withReadings([reading('a', 150)]), repository);
+    expect(result.data?.readings.map(r => r.id) ?? ['a']).toEqual(['a']);
   });
 });

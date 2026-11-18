@@ -85,13 +85,33 @@ async function saveSyncState(state: SyncState | null): Promise<void> {
   else await AsyncStorage.removeItem(STATE_KEY);
 }
 
-/** Ключ шифрования: на телефоне — в защищенном хранилище, в вебе — в браузере */
+/**
+ * Хранилище ключа в вебе — sessionStorage вкладки: ключ живет до закрытия вкладки
+ * и не лежит в открытом localStorage. После закрытия пароль вводится заново.
+ */
+function webSession(): Storage | null {
+  try {
+    return (globalThis as { sessionStorage?: Storage }).sessionStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Ключ шифрования: на телефоне — в защищенном хранилище, в вебе — до закрытия вкладки */
 async function loadVaultKey(): Promise<VaultKey | null> {
   try {
-    const raw =
-      Platform.OS === 'web'
-        ? await AsyncStorage.getItem(KEY_STORAGE)
-        : await SecureStore.getItemAsync(KEY_STORAGE);
+    let raw: string | null;
+    if (Platform.OS === 'web') {
+      // Ключ, который прежние версии хранили в localStorage, переносится и стирается
+      const legacy = await AsyncStorage.getItem(KEY_STORAGE);
+      if (legacy) {
+        webSession()?.setItem(KEY_STORAGE, legacy);
+        await AsyncStorage.removeItem(KEY_STORAGE);
+      }
+      raw = webSession()?.getItem(KEY_STORAGE) ?? null;
+    } else {
+      raw = await SecureStore.getItemAsync(KEY_STORAGE);
+    }
     return raw ? (JSON.parse(raw) as VaultKey) : null;
   } catch {
     return null;
@@ -101,8 +121,10 @@ async function loadVaultKey(): Promise<VaultKey | null> {
 async function saveVaultKey(value: VaultKey | null): Promise<void> {
   const raw = value ? JSON.stringify(value) : null;
   if (Platform.OS === 'web') {
-    if (raw) await AsyncStorage.setItem(KEY_STORAGE, raw);
-    else await AsyncStorage.removeItem(KEY_STORAGE);
+    const session = webSession();
+    if (raw) session?.setItem(KEY_STORAGE, raw);
+    else session?.removeItem(KEY_STORAGE);
+    await AsyncStorage.removeItem(KEY_STORAGE);
   } else if (raw) {
     await SecureStore.setItemAsync(KEY_STORAGE, raw);
   } else {
@@ -203,6 +225,117 @@ async function finishSignIn(email: string, password: string): Promise<void> {
     lastVersion: 0,
     lastSyncedAt: null,
   });
+}
+
+/**
+ * Повторный ввод пароля, когда ключ шифрования на устройстве устарел
+ * (пароль сменили на другом устройстве) или в вебе закрыли вкладку.
+ * Вход в аккаунт при этом не нужен — сессия жива.
+ */
+export async function unlockVault(password: string): Promise<void> {
+  try {
+    const userId = await currentUserId();
+    const vault = await fetchVault(userId);
+    await saveVaultKey(await prepareKey(password, vault));
+  } catch (e) {
+    throw asSyncError(e);
+  }
+}
+
+/**
+ * Смена пароля. Облачная копия перешифровывается ключом из нового пароля
+ * (с новой солью), затем меняется пароль учетной записи. Если смена пароля
+ * учетной записи не удалась, копия возвращается к прежнему ключу.
+ * Другие устройства после этого попросят ввести новый пароль.
+ */
+export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  try {
+    const state = await loadSyncState();
+    if (!state) throw new SyncError('NOT_SIGNED_IN');
+    const supabase = client();
+
+    // Текущий пароль проверяется самим сервером
+    const currentSecret = await deriveAuthSecret(currentPassword, state.email);
+    const { error: authError } = await supabase.auth.signInWithPassword({
+      email: state.email,
+      password: currentSecret,
+    });
+    if (authError) {
+      if (/invalid/i.test(authError.message)) throw new SyncError('WRONG_PASSWORD');
+      throw asSyncError(authError);
+    }
+
+    const userId = await currentUserId();
+    const vault = await fetchVault(userId);
+    const salt = Crypto.getRandomBytes(16);
+    const newKey: VaultKey = {
+      key: toHex(await deriveVaultKey(newPassword, salt, VAULT_KDF_ITERATIONS)),
+      salt: toBase64(salt),
+      iterations: VAULT_KDF_ITERATIONS,
+    };
+
+    let rollback: (() => Promise<void>) | null = null;
+    if (vault) {
+      // Прежнее состояние копии запоминается до записи — для отката
+      const previous = {
+        kdf_salt: vault.kdf_salt,
+        kdf_iterations: vault.kdf_iterations,
+        iv: vault.iv,
+        ciphertext: vault.ciphertext,
+      };
+      const oldKey = await prepareKey(currentPassword, vault);
+      const plain = decryptVault({ iv: vault.iv, ciphertext: vault.ciphertext }, fromHex(oldKey.key));
+      const payload = encryptVault(plain, fromHex(newKey.key), Crypto.getRandomBytes(12));
+      const nextVersion = vault.version + 1;
+      const { data, error } = await supabase
+        .from(VAULT_TABLE)
+        .update({
+          version: nextVersion,
+          kdf_salt: newKey.salt,
+          kdf_iterations: newKey.iterations,
+          iv: payload.iv,
+          ciphertext: payload.ciphertext,
+          device_id: state.deviceId,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId)
+        .eq('version', vault.version)
+        .select('version');
+      if (error) throw asSyncError(error);
+      if (!data || data.length === 0) throw new SyncError('CONFLICT');
+
+      rollback = async () => {
+        await supabase
+          .from(VAULT_TABLE)
+          .update({
+            version: nextVersion + 1,
+            ...previous,
+            device_id: state.deviceId,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('user_id', userId)
+          .eq('version', nextVersion)
+          .select('version');
+      };
+    }
+
+    const { error: updateError } = await supabase.auth.updateUser({
+      password: await deriveAuthSecret(newPassword, state.email),
+    });
+    if (updateError) {
+      await rollback?.().catch(() => undefined);
+      throw asSyncError(updateError);
+    }
+
+    await saveVaultKey(newKey);
+    // Данные не менялись: если устройство было в курсе прежней версии,
+    // новая версия тоже «увидена», лишнего слияния не будет
+    if (vault && state.lastVersion === vault.version) {
+      await saveSyncState({ ...state, lastVersion: vault.version + 1 });
+    }
+  } catch (e) {
+    throw asSyncError(e);
+  }
 }
 
 /** Выход: локальные данные остаются, удаляются только сессия, ключ и база синхронизации */
@@ -310,11 +443,12 @@ export async function syncNow(local: AppData, repository: AppRepository): Promis
 
       // Отправляем, если в облаке нет того, что теперь будет на устройстве
       if (status !== 'pulled') {
+        const nextVersion = remote.version + 1;
         const payload = encodeForCloud(next, vaultKey);
         const { data, error } = await client()
           .from(VAULT_TABLE)
           .update({
-            version: remote.version + 1,
+            version: nextVersion,
             iv: payload.iv,
             ciphertext: payload.ciphertext,
             device_id: state.deviceId,
@@ -325,7 +459,7 @@ export async function syncNow(local: AppData, repository: AppRepository): Promis
           .select('version');
         if (error) throw asSyncError(error);
         if (!data || data.length === 0) continue; // кто-то записал между чтением и записью
-        await finish(repository, state, remote.version + 1, next, syncedAt);
+        await finish(repository, state, nextVersion, next, syncedAt);
       } else {
         await finish(repository, state, remote.version, next, syncedAt);
       }

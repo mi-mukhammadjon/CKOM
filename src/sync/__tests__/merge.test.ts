@@ -83,4 +83,58 @@ describe('mergeAppData', () => {
     const merged = mergeAppData(b, local, remote).data.settings;
     expect(merged).toMatchObject({ theme: 'light', currency: '$' });
   });
+
+  it('после слияния цепочка «было → стало» и показание счетчика пересчитываются', () => {
+    const at = (id: string, value: number, date: string, prev: number): ReadingEntry => ({
+      ...reading(id, value),
+      date,
+      createdAt: `${date}T10:00:00Z`,
+      previousReading: prev,
+      consumption: value - prev,
+      cost: (value - prev) * 650,
+    });
+    const start = data([at('sep', 100, '2026-09-01', 50)]);
+    // Оба устройства без связи добавили следующее показание от одного и того же «было»
+    const local = data([...start.readings, at('oct', 130, '2026-10-01', 100)]);
+    const remote = data([...start.readings, at('nov', 170, '2026-11-01', 100)]);
+    const merged = mergeAppData(start, local, remote).data;
+    const nov = merged.readings.find(r => r.id === 'nov')!;
+    expect(nov.previousReading).toBe(130);
+    expect(nov.consumption).toBe(40);
+    const meter = merged.meters.find(m => m.id === 'meter-gas-prop-1')!;
+    expect(meter.currentReading).toBe(170);
+    expect(meter.lastReadingDate).toBe('2026-11-01');
+  });
+
+  it('объект удален там, а здесь в него добавлено показание — объект возвращается', () => {
+    const base2 = cleanAppData();
+    const dacha = { id: 'prop-2', name: 'Дача', isDefault: false };
+    const dachaMeter = { ...base2.meters.find(m => m.id === 'meter-gas-prop-1')!, id: 'm-dacha', propertyId: 'prop-2' };
+    const withDacha = { ...base2, properties: [...base2.properties, dacha], meters: [...base2.meters, dachaMeter] };
+    const newReading = { ...reading('d1', 140), meterId: 'm-dacha', propertyId: 'prop-2' };
+    const local = { ...withDacha, readings: [newReading] };
+    const remote = base2; // на другом устройстве «Дачу» удалили вместе со счетчиками
+    const { data: merged, stats } = mergeAppData(withDacha, local, remote);
+    expect(merged.properties.map(p => p.id)).toContain('prop-2');
+    expect(merged.meters.map(m => m.id)).toContain('m-dacha');
+    expect(merged.readings.find(r => r.id === 'd1')?.propertyId).toBe('prop-2');
+    expect(stats.conflicts).toBeGreaterThan(0);
+  });
+
+  it('объект удален там и не менялся здесь — удаление применяется', () => {
+    const base2 = cleanAppData();
+    const dacha = { id: 'prop-2', name: 'Дача', isDefault: false };
+    const withDacha = { ...base2, properties: [...base2.properties, dacha] };
+    const merged = mergeAppData(withDacha, withDacha, base2).data;
+    expect(merged.properties.map(p => p.id)).not.toContain('prop-2');
+  });
+
+  it('правки, сделанные во время синхронизации, не теряются при наложении результата', () => {
+    // local0 — что ушло в облако, result — что вернулось, local1 — что пользователь успел ввести
+    const local0 = data([reading('a', 110)]);
+    const result = data([reading('a', 110), reading('web', 140)]);
+    const local1 = data([reading('a', 110), reading('typed', 125)]);
+    const merged = mergeAppData(local0, local1, result).data;
+    expect(merged.readings.map(r => r.id).sort()).toEqual(['a', 'typed', 'web']);
+  });
 });

@@ -19,6 +19,8 @@ import type { RecoveryCandidate } from '../services/db/types';
 import {
   SyncError,
   SyncErrorCode,
+  changePassword,
+  unlockVault,
   SyncState,
   deleteCloudCopy,
   loadSyncState,
@@ -27,6 +29,7 @@ import {
   signUp as syncSignUp,
   syncNow,
 } from '../sync/engine';
+import { mergeAppData } from '../sync/merge';
 import { isSyncConfigured } from '../sync/supabase';
 import { normalizeAppData, stripSampleData } from '../services/normalize';
 import { syncReadingReminder } from '../services/notifications';
@@ -176,6 +179,9 @@ interface AppContextValue {
   cloudSignOut: () => Promise<void>;
   cloudSyncNow: () => Promise<void>;
   cloudDeleteCopy: () => Promise<void>;
+  /** Повторный ввод пароля, если ключ на устройстве устарел */
+  cloudUnlock: (password: string) => Promise<void>;
+  cloudChangePassword: (currentPassword: string, newPassword: string) => Promise<void>;
 
   // Копии и восстановление
   /** Найденные при запуске данные, которые можно вернуть (основная база пуста) */
@@ -221,16 +227,54 @@ function createId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 }
 
+/**
+ * useState, у которого последнее значение доступно синхронно через ref.
+ * Асинхронные операции читают ref, а не значение из замыкания: две быстрые
+ * правки подряд не затирают друг друга.
+ */
+function useSyncedState<T>(initial: T, onChange?: () => void) {
+  const [value, setValue] = useState<T>(initial);
+  const ref = useRef<T>(value);
+  const set = useCallback(
+    (next: T | ((prev: T) => T)) => {
+      const resolved = typeof next === 'function' ? (next as (prev: T) => T)(ref.current) : next;
+      if (resolved !== ref.current) onChange?.();
+      ref.current = resolved;
+      setValue(resolved);
+    },
+    [onChange]
+  );
+  return [value, set, ref] as const;
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [loading, setLoading] = useState(true);
-  const [allMeters, setAllMeters] = useState<Meter[]>(DEFAULT_METERS);
-  const [tariffs, setTariffs] = useState<Tariff[]>(DEFAULT_TARIFFS);
-  const [properties, setProperties] = useState<Property[]>(DEFAULT_PROPERTIES);
-  const [allReadings, setAllReadings] = useState<ReadingEntry[]>([]);
-  const [allPayments, setAllPayments] = useState<Payment[]>([]);
-  const [allInspectors, setAllInspectors] = useState<Inspector[]>([]);
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
-  const [activePropertyId, setActivePropId] = useState<string>(DEFAULT_PROPERTIES[0].id);
+  /** Счетчик правок: по нему синхронизация узнает, что данные менялись во время обмена */
+  const revisionRef = useRef(0);
+  const bumpRevision = useCallback(() => {
+    revisionRef.current += 1;
+  }, []);
+  const [allMeters, setAllMeters, metersRef] = useSyncedState<Meter[]>(DEFAULT_METERS, bumpRevision);
+  const [tariffs, setTariffs, tariffsRef] = useSyncedState<Tariff[]>(DEFAULT_TARIFFS, bumpRevision);
+  const [properties, setProperties, propertiesRef] = useSyncedState<Property[]>(DEFAULT_PROPERTIES, bumpRevision);
+  const [allReadings, setAllReadings, readingsRef] = useSyncedState<ReadingEntry[]>([], bumpRevision);
+  const [allPayments, setAllPayments, paymentsRef] = useSyncedState<Payment[]>([], bumpRevision);
+  const [allInspectors, setAllInspectors, inspectorsRef] = useSyncedState<Inspector[]>([], bumpRevision);
+  const [settings, setSettings, settingsRef] = useSyncedState<AppSettings>(DEFAULT_SETTINGS, bumpRevision);
+  const [activePropertyId, setActivePropId, activePropertyIdRef] = useSyncedState<string>(DEFAULT_PROPERTIES[0].id);
+
+  /**
+   * Все изменения данных выполняются строго по очереди: следующая правка
+   * начинается, когда предыдущая записана в базу. Применение результата
+   * синхронизации идет через ту же очередь и не смешивается с правками.
+   */
+  const queueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const exclusive = useCallback(<R,>(task: () => Promise<R>): Promise<R> => {
+    const run = queueRef.current.then(task);
+    queueRef.current = run.catch(() => undefined);
+    return run;
+  }, []);
+
   const [recoveryOffer, setRecoveryOffer] = useState<RecoveryCandidate | null>(null);
   const [syncState, setSyncState] = useState<SyncState | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -251,7 +295,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const preferred = data.properties.find(p => p.isDefault) || data.properties[0];
       return preferred ? preferred.id : current;
     });
-  }, []);
+  }, [setActivePropId, setAllInspectors, setAllMeters, setAllPayments, setAllReadings, setProperties, setSettings, setTariffs]);
 
   // Открытие хранилища при старте: SQLite на мобильных, AsyncStorage в вебе
   useEffect(() => {
@@ -376,7 +420,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await repository.upsertMeters(changed);
       }
     },
-    []
+    [setAllMeters]
   );
 
   /**
@@ -387,7 +431,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     async (meterId: string, readingsList: ReadingEntry[]): Promise<ReadingEntry[]> => {
       const meterReadings = readingsList.filter(r => r.meterId === meterId);
       const meterType = meterReadings[0]?.meterType;
-      const tariff = tariffs.find(item => item.meterType === meterType);
+      const tariff = tariffsRef.current.find(item => item.meterType === meterType);
       const changed = recomputeReadingChain(meterReadings, tariff);
       if (changed.length === 0) return readingsList;
 
@@ -397,17 +441,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return readingsList.map(r => changedById.get(r.id) ?? r);
     },
-    [tariffs]
+    [tariffsRef]
   );
 
   // ---------- Показания ----------
 
   const addReading = useCallback(
-    async (data: AddReadingInput): Promise<ReadingEntry> => {
-      const meter = allMeters.find(m => m.id === data.meterId);
+    async (data: AddReadingInput): Promise<ReadingEntry> =>
+      exclusive(async () => {
+      const meter = metersRef.current.find(m => m.id === data.meterId);
       if (!meter) throw new Error(`Счетчик ${data.meterId} не найден`);
 
-      const tariff = tariffs.find(item => item.meterType === data.meterType);
+      const tariff = tariffsRef.current.find(item => item.meterType === data.meterType);
       const createdAt = new Date().toISOString();
       // «Было» — показание предыдущей по дате записи этого счетчика, а для первой
       // записи — начальное показание. При замене счетчика отсчет идет с нуля.
@@ -415,7 +460,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ? 0
         : previousReadingFor(
             { date: data.date, createdAt },
-            allReadings.filter(r => r.meterId === meter.id),
+            readingsRef.current.filter(r => r.meterId === meter.id),
             meter.currentReading
           );
       const consumption = Math.max(0, data.reading - previousReading);
@@ -438,25 +483,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       await repository.insertReading(newEntry);
       // Запись, внесенная задним числом, становится «было» для следующей
-      const nextReadings = await applyReadingChain(meter.id, [newEntry, ...allReadings]);
+      const nextReadings = await applyReadingChain(meter.id, [newEntry, ...readingsRef.current]);
       setAllReadings(nextReadings);
-      await syncMeterState(allMeters, nextReadings);
+      await syncMeterState(metersRef.current, nextReadings);
 
       return nextReadings.find(r => r.id === newEntry.id) ?? newEntry;
-    },
-    [allMeters, allReadings, tariffs, syncMeterState, applyReadingChain]
+      }),
+    [exclusive, metersRef, tariffsRef, readingsRef, applyReadingChain, setAllReadings, syncMeterState]
   );
 
   const updateReading = useCallback(
-    async (id: string, changes: UpdateReadingInput) => {
-      const target = allReadings.find(r => r.id === id);
+    async (id: string, changes: UpdateReadingInput) =>
+      exclusive(async () => {
+      const target = readingsRef.current.find(r => r.id === id);
       if (!target) return;
 
       const reading = changes.reading ?? target.reading;
       const isReplacement = changes.isReplacement ?? target.isReplacement;
       const previousReading = isReplacement ? 0 : target.previousReading;
       const consumption = Math.max(0, reading - previousReading);
-      const tariff = tariffs.find(item => item.meterType === target.meterType);
+      const tariff = tariffsRef.current.find(item => item.meterType === target.meterType);
 
       const nextPhoto = changes.photo === undefined ? target.photo : changes.photo || undefined;
       if (target.photo && nextPhoto !== target.photo) {
@@ -479,30 +525,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Правка значения или даты сдвигает «было» соседних записей
       const nextReadings = await applyReadingChain(
         target.meterId,
-        allReadings.map(r => (r.id === id ? updatedEntry : r))
+        readingsRef.current.map(r => (r.id === id ? updatedEntry : r))
       );
       setAllReadings(nextReadings);
-      await syncMeterState(allMeters, nextReadings);
-    },
-    [allMeters, allReadings, tariffs, syncMeterState, applyReadingChain]
+      await syncMeterState(metersRef.current, nextReadings);
+      }),
+    [exclusive, readingsRef, tariffsRef, applyReadingChain, setAllReadings, syncMeterState, metersRef]
   );
 
   const deleteReading = useCallback(
-    async (id: string) => {
-      const target = allReadings.find(r => r.id === id);
+    async (id: string) =>
+      exclusive(async () => {
+      const target = readingsRef.current.find(r => r.id === id);
 
       await repository.deleteReading(id);
       if (target?.photo) deletePhoto(target.photo);
       // Следующая запись теперь считается от предыдущей перед удаленной
-      let remaining = allReadings.filter(r => r.id !== id);
+      let remaining = readingsRef.current.filter(r => r.id !== id);
 
       // Удалили самую раннюю запись — ее начальная точка переходит к следующей
       if (target && !target.isReplacement) {
-        const meterReadings = allReadings.filter(r => r.meterId === target.meterId).sort(byOldestReading);
+        const meterReadings = readingsRef.current.filter(r => r.meterId === target.meterId).sort(byOldestReading);
         const [first, second] = meterReadings;
         if (first?.id === id && second && !second.isReplacement) {
           const consumption = Math.max(0, second.reading - target.previousReading);
-          const tariff = tariffs.find(item => item.meterType === second.meterType);
+          const tariff = tariffsRef.current.find(item => item.meterType === second.meterType);
           const inherited: ReadingEntry = {
             ...second,
             previousReading: target.previousReading,
@@ -516,15 +563,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const nextReadings = target ? await applyReadingChain(target.meterId, remaining) : remaining;
       setAllReadings(nextReadings);
-      await syncMeterState(allMeters, nextReadings);
-    },
-    [allMeters, allReadings, tariffs, syncMeterState, applyReadingChain]
+      await syncMeterState(metersRef.current, nextReadings);
+      }),
+    [exclusive, readingsRef, applyReadingChain, setAllReadings, syncMeterState, metersRef, tariffsRef]
   );
 
   // ---------- Платежи ----------
 
   const addPayment = useCallback(
-    async (data: PaymentInput): Promise<Payment> => {
+    async (data: PaymentInput): Promise<Payment> =>
+      exclusive(async () => {
       const newPayment: Payment = {
         id: createId('pay'),
         propertyId: activeProperty.id,
@@ -541,13 +589,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setAllPayments(prev => [newPayment, ...prev]);
       await repository.insertPayment(newPayment);
       return newPayment;
-    },
-    [activeProperty.id]
+      }),
+    [activeProperty.id, exclusive, setAllPayments]
   );
 
   const updatePayment = useCallback(
-    async (id: string, changes: PaymentInput) => {
-      const target = allPayments.find(p => p.id === id);
+    async (id: string, changes: PaymentInput) =>
+      exclusive(async () => {
+      const target = paymentsRef.current.find(p => p.id === id);
       if (!target) return;
 
       const nextPhoto =
@@ -569,24 +618,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setAllPayments(prev => prev.map(p => (p.id === id ? updated : p)));
       await repository.updatePayment(updated);
-    },
-    [allPayments]
+      }),
+    [exclusive, paymentsRef, setAllPayments]
   );
 
   const deletePayment = useCallback(
-    async (id: string) => {
-      const target = allPayments.find(p => p.id === id);
+    async (id: string) =>
+      exclusive(async () => {
+      const target = paymentsRef.current.find(p => p.id === id);
       setAllPayments(prev => prev.filter(p => p.id !== id));
       await repository.deletePayment(id);
       if (target?.receiptPhoto) deletePhoto(target.receiptPhoto);
-    },
-    [allPayments]
+      }),
+    [exclusive, paymentsRef, setAllPayments]
   );
 
   // ---------- Инспекторы ----------
 
   const saveInspector = useCallback(
-    async (meterType: MeterType, input: InspectorInput) => {
+    async (meterType: MeterType, input: InspectorInput) =>
+      exclusive(async () => {
       const clean = (value?: string) => value?.trim() || undefined;
       const fields = {
         name: clean(input.name),
@@ -595,7 +646,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         telegram: clean(input.telegram),
         notes: clean(input.notes),
       };
-      const existing = allInspectors.find(
+      const existing = inspectorsRef.current.find(
         i => i.propertyId === activeProperty.id && i.meterType === meterType
       );
 
@@ -617,19 +668,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       setAllInspectors(prev => [...prev.filter(i => i.id !== inspector.id), inspector]);
       await repository.upsertInspector(inspector);
-    },
-    [allInspectors, activeProperty.id]
+      }),
+    [activeProperty.id, exclusive, inspectorsRef, setAllInspectors]
   );
 
-  const deleteInspector = useCallback(async (id: string) => {
+  const deleteInspector = useCallback(
+    async (id: string) =>
+      exclusive(async () => {
     setAllInspectors(prev => prev.filter(i => i.id !== id));
     await repository.deleteInspector(id);
-  }, []);
+      }),
+    [exclusive, setAllInspectors]
+  );
 
   // ---------- Счетчики ----------
 
   const addMeter = useCallback(
-    async (type: MeterType, options: NewMeterOptions = {}): Promise<Meter> => {
+    async (type: MeterType, options: NewMeterOptions = {}): Promise<Meter> =>
+      exclusive(async () => {
       const newMeter = createMeterForProperty(activeProperty.id, type, {
         ...(options.name ? { name: options.name } : {}),
         ...(options.serialNumber ? { serialNumber: options.serialNumber } : {}),
@@ -640,49 +696,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setAllMeters(prev => [...prev, newMeter]);
       await repository.upsertMeters([newMeter]);
       return newMeter;
-    },
-    [activeProperty.id]
+      }),
+    [activeProperty.id, exclusive, setAllMeters]
   );
 
-  const updateMeter = useCallback(async (meter: Meter) => {
+  const updateMeter = useCallback(
+    async (meter: Meter) =>
+      exclusive(async () => {
     setAllMeters(prev => prev.map(m => (m.id === meter.id ? meter : m)));
     await repository.upsertMeters([meter]);
-  }, []);
+      }),
+    [exclusive, setAllMeters]
+  );
 
   const deleteMeter = useCallback(
-    async (id: string) => {
+    async (id: string) =>
+      exclusive(async () => {
       // Показания удаленного счетчика теряют смысл — удаляем вместе с ним
-      const removedReadings = allReadings.filter(r => r.meterId === id);
+      const removedReadings = readingsRef.current.filter(r => r.meterId === id);
 
       setAllMeters(prev => prev.filter(m => m.id !== id));
       setAllReadings(prev => prev.filter(r => r.meterId !== id));
 
       await repository.deleteMeter(id);
       removedReadings.forEach(r => deletePhoto(r.photo));
-    },
-    [allReadings]
+      }),
+    [exclusive, readingsRef, setAllMeters, setAllReadings]
   );
 
   const setInitialReadings = useCallback(
-    async (values: InitialReadingInput[], date: string) => {
+    async (values: InitialReadingInput[], date: string) =>
+      exclusive(async () => {
       const byId = new Map(values.map(v => [v.meterId, v.reading]));
       // Счетчики с записями в журнале не трогаем: их показание определяет история
-      const changed = allMeters
-        .filter(m => byId.has(m.id) && !allReadings.some(r => r.meterId === m.id))
+      const changed = metersRef.current
+        .filter(m => byId.has(m.id) && !readingsRef.current.some(r => r.meterId === m.id))
         .map(m => ({ ...m, currentReading: byId.get(m.id)!, lastReadingDate: date }));
       if (changed.length === 0) return;
 
       const changedById = new Map(changed.map(m => [m.id, m]));
       setAllMeters(prev => prev.map(m => changedById.get(m.id) ?? m));
       await repository.upsertMeters(changed);
-    },
-    [allMeters, allReadings]
+      }),
+    [exclusive, metersRef, readingsRef, setAllMeters]
   );
 
   // ---------- Объекты учета ----------
 
   const addProperty = useCallback(
-    async (name: string, address?: string): Promise<Property> => {
+    async (name: string, address?: string): Promise<Property> =>
+      exclusive(async () => {
       const newProp: Property = {
         id: createId('prop'),
         name,
@@ -698,21 +761,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await repository.upsertProperty(newProp);
       await repository.upsertMeters(newMeters);
       return newProp;
-    },
-    []
+      }),
+    [exclusive, setAllMeters, setProperties]
   );
 
-  const updateProperty = useCallback(async (property: Property) => {
+  const updateProperty = useCallback(
+    async (property: Property) =>
+      exclusive(async () => {
     setProperties(prev => prev.map(p => (p.id === property.id ? property : p)));
     await repository.upsertProperty(property);
-  }, []);
+      }),
+    [exclusive, setProperties]
+  );
 
   const deleteProperty = useCallback(
-    async (id: string): Promise<boolean> => {
+    async (id: string): Promise<boolean> =>
+      exclusive(async () => {
       // Последний объект удалить нельзя — приложению нужен хотя бы один
-      if (properties.length <= 1) return false;
+      if (propertiesRef.current.length <= 1) return false;
 
-      const nextProperties = properties.filter(p => p.id !== id);
+      const nextProperties = propertiesRef.current.filter(p => p.id !== id);
       // Если удаляли объект по умолчанию, назначаем новый
       const needsNewDefault = !nextProperties.some(p => p.isDefault);
       if (needsNewDefault) {
@@ -720,8 +788,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       const removedPhotos = [
-        ...allReadings.filter(r => r.propertyId === id).map(r => r.photo),
-        ...allPayments.filter(p => p.propertyId === id).map(p => p.receiptPhoto),
+        ...readingsRef.current.filter(r => r.propertyId === id).map(r => r.photo),
+        ...paymentsRef.current.filter(p => p.propertyId === id).map(p => p.receiptPhoto),
       ];
 
       setProperties(nextProperties);
@@ -729,7 +797,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setAllReadings(prev => prev.filter(r => r.propertyId !== id));
       setAllPayments(prev => prev.filter(p => p.propertyId !== id));
       setAllInspectors(prev => prev.filter(i => i.propertyId !== id));
-      if (activePropertyId === id) {
+      if (activePropertyIdRef.current === id) {
         setActivePropId(nextProperties[0].id);
       }
 
@@ -740,39 +808,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       removedPhotos.forEach(photo => deletePhoto(photo));
       return true;
-    },
-    [properties, allReadings, allPayments, activePropertyId]
+      }),
+    [activePropertyIdRef, exclusive, paymentsRef, propertiesRef, readingsRef, setActivePropId, setAllInspectors, setAllMeters, setAllPayments, setAllReadings, setProperties]
   );
 
   // ---------- Тарифы и настройки ----------
 
   const updateTariff = useCallback(
-    async (tariff: Tariff) => {
-      const next = tariffs.map(item =>
-        item.id === tariff.id ? { ...tariff, currency: settings.currency } : item
+    async (tariff: Tariff) =>
+      exclusive(async () => {
+      const next = tariffsRef.current.map(item =>
+        item.id === tariff.id ? { ...tariff, currency: settingsRef.current.currency } : item
       );
       setTariffs(next);
       await repository.replaceTariffs(next);
-    },
-    [tariffs, settings.currency]
+      }),
+    [exclusive, setTariffs, settingsRef, tariffsRef]
   );
 
   /** Возвращает все тарифы к стандартным одной операцией */
-  const resetTariffs = useCallback(async () => {
-    const next = DEFAULT_TARIFFS.map(tariff => ({ ...tariff, currency: settings.currency }));
+  const resetTariffs = useCallback(
+    async () =>
+      exclusive(async () => {
+    const next = DEFAULT_TARIFFS.map(tariff => ({ ...tariff, currency: settingsRef.current.currency }));
     setTariffs(next);
     await repository.replaceTariffs(next);
-  }, [settings.currency]);
+      }),
+    [exclusive, setTariffs, settingsRef]
+  );
 
   const updateSettings = useCallback(
-    async (newSettings: Partial<AppSettings>) => {
-      const updated: AppSettings = { ...settings, ...newSettings };
+    async (newSettings: Partial<AppSettings>) =>
+      exclusive(async () => {
+      const updated: AppSettings = { ...settingsRef.current, ...newSettings };
       setSettings(updated);
       await repository.saveSettings(updated);
 
       // Валюта тарифов не должна расходиться с валютой расчетов
-      if (newSettings.currency && newSettings.currency !== settings.currency) {
-        const nextTariffs = tariffs.map(tariff => ({ ...tariff, currency: updated.currency }));
+      if (newSettings.currency && newSettings.currency !== settingsRef.current.currency) {
+        const nextTariffs = tariffsRef.current.map(tariff => ({ ...tariff, currency: updated.currency }));
         setTariffs(nextTariffs);
         await repository.replaceTariffs(nextTariffs);
       }
@@ -787,23 +861,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (reminderChanged) {
         await syncReadingReminder(updated);
       }
-    },
-    [settings, tariffs]
+      }),
+    [exclusive, setSettings, setTariffs, settingsRef, tariffsRef]
   );
 
   // ---------- Данные ----------
 
   /** Полная замена данных: импорт, сброс. Чистит осиротевшие снимки. */
   const replaceAllData = useCallback(
-    async (data: AppData, reason = 'replace') => {
-      // Перед заменой всех данных сохраняем копию: ошибку импорта можно отменить
-      await repository.createSnapshot(`before${reason}`);
-      await repository.replaceAll(data);
-      deleteOrphanPhotos(collectPhotoNames(data));
-      applyData(data);
-      await syncReadingReminder(data.settings);
-    },
-    [applyData]
+    async (data: AppData, reason = 'replace') =>
+      exclusive(async () => {
+        // Перед заменой всех данных сохраняем копию: ошибку импорта можно отменить
+        await repository.createSnapshot(`before${reason}`);
+        await repository.replaceAll(data);
+        deleteOrphanPhotos(collectPhotoNames(data));
+        applyData(data);
+        await syncReadingReminder(data.settings);
+      }),
+    [applyData, exclusive]
   );
 
   const resetToDefaults = useCallback(async () => {
@@ -831,50 +906,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // ---------- Облачная синхронизация ----------
 
-  const currentData = useCallback(
+
+  /** Текущее состояние всех данных — всегда последнее, без ожидания перерисовки */
+  const snapshotData = useCallback(
     (): AppData => ({
-      meters: allMeters,
-      tariffs,
-      properties,
-      readings: allReadings,
-      payments: allPayments,
-      inspectors: allInspectors,
-      settings,
+      meters: metersRef.current,
+      tariffs: tariffsRef.current,
+      properties: propertiesRef.current,
+      readings: readingsRef.current,
+      payments: paymentsRef.current,
+      inspectors: inspectorsRef.current,
+      settings: settingsRef.current,
     }),
-    [allMeters, tariffs, properties, allReadings, allPayments, allInspectors, settings]
+    [metersRef, tariffsRef, propertiesRef, readingsRef, paymentsRef, inspectorsRef, settingsRef]
   );
 
-  // Актуальные данные для фоновой синхронизации без пересоздания таймеров
-  const dataRef = useRef<AppData | null>(null);
-  dataRef.current = loading ? null : currentData();
+  const loadingRef = useRef(true);
+  useEffect(() => {
+    loadingRef.current = loading;
+  }, [loading]);
   const syncInFlight = useRef(false);
+  /** Пока шла синхронизация, данные снова менялись — после нее нужен еще один обмен */
+  const syncAgain = useRef(false);
 
   useEffect(() => {
     loadSyncState().then(setSyncState).catch(() => undefined);
   }, []);
 
   const runSync = useCallback(async (): Promise<void> => {
-    const local = dataRef.current;
-    if (!isSyncConfigured || !local || syncInFlight.current) return;
+    if (!isSyncConfigured || loadingRef.current) return;
+    if (syncInFlight.current) {
+      syncAgain.current = true;
+      return;
+    }
     syncInFlight.current = true;
     setSyncing(true);
     try {
-      const result = await syncNow(local, repository);
-      if (result.data) {
-        // Пришли изменения с другого устройства: применяем без очистки снимков
-        await repository.replaceAll(result.data);
-        applyData(result.data);
-      }
-      setSyncError(null);
-      setSyncState(await loadSyncState());
+      do {
+        syncAgain.current = false;
+        // Снимок берется в очереди правок: незавершенная правка не попадет в него наполовину
+        const { local, revision } = await exclusive(async () => ({
+          local: snapshotData(),
+          revision: revisionRef.current,
+        }));
+        const result = await syncNow(local, repository);
+        if (result.data) {
+          const remoteData = result.data;
+          await exclusive(async () => {
+            let next = remoteData;
+            // Пока данные летали в облако, пользователь успел что-то изменить:
+            // его правки накладываются поверх пришедших данных, а не стираются ими.
+            // Облачная база синхронизации остается прежней, поэтому следующий
+            // обмен отправит эти правки на сервер.
+            if (revisionRef.current !== revision) {
+              next = normalizeAppData(mergeAppData(local, snapshotData(), remoteData).data);
+              syncAgain.current = true;
+            }
+            await repository.replaceAll(next);
+            applyData(next);
+          });
+        } else if (revisionRef.current !== revision) {
+          syncAgain.current = true;
+        }
+        setSyncError(null);
+        setSyncState(await loadSyncState());
+      } while (syncAgain.current);
     } catch (e) {
       setSyncError(e instanceof SyncError ? e.code : 'UNKNOWN');
       if (!(e instanceof SyncError) || e.code === 'UNKNOWN') console.warn('Синхронизация не удалась:', e);
     } finally {
       syncInFlight.current = false;
+      syncAgain.current = false;
       setSyncing(false);
     }
-  }, [applyData]);
+  }, [applyData, exclusive, snapshotData]);
 
   // Автосинхронизация: через 4 с после изменений, при запуске и возврате в приложение
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -926,6 +1031,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSyncState(null);
     setSyncError(null);
   }, []);
+
+  const cloudUnlock = useCallback(
+    async (password: string) => {
+      await unlockVault(password);
+      setSyncError(null);
+      await runSync();
+    },
+    [runSync]
+  );
+
+  const cloudChangePassword = useCallback(
+    async (currentPassword: string, newPassword: string) => {
+      // Сначала отправляем несохраненные правки — перешифровывается актуальная копия
+      await runSync();
+      await changePassword(currentPassword, newPassword);
+      setSyncError(null);
+      setSyncState(await loadSyncState());
+    },
+    [runSync]
+  );
 
   const cloudDeleteCopy = useCallback(async () => {
     await deleteCloudCopy(repository);
@@ -1015,6 +1140,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     cloudSignOut,
     cloudSyncNow: runSync,
     cloudDeleteCopy,
+    cloudUnlock,
+    cloudChangePassword,
     recoveryOffer,
     dismissRecoveryOffer,
     listRecoveryCandidates,
